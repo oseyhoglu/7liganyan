@@ -1,6 +1,9 @@
 import { NextRequest } from "next/server";
 import { runScrapeTask } from "@/lib/main-task";
 
+// Vercel Hobby: max 60sn. TJK'dan birden fazla şehir çekildiğinde 10-15sn sürebilir.
+export const maxDuration = 60;
+
 /**
  * POST /api/scrape
  *
