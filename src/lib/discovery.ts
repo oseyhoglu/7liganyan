@@ -4,31 +4,31 @@ import { getTodayFormatted } from "./date-utils";
 
 export interface CityLink {
   cityName: string;
+  sehirId: string;
   url: string;
 }
 
 /**
  * Faz 1 — Dinamik Şehir ve Yarış Günü Keşfi
  *
- * TJK yıllık program endpoint'inden bugünün yarış şehirlerini keşfeder.
- * Her şehrin detay linkini tam URL olarak döner.
+ * TJK günlük yarış programı AJAX endpoint'inden bugünün yarış şehirlerini keşfeder.
+ * Sadece yerli hipodromları (SehirId <= 10) döner (yurt dışı yarışları hariç).
  */
 export async function discoverCities(): Promise<CityLink[]> {
   const today = getTodayFormatted();
 
   const { data: html } = await tjkClient.get(
-    "/TR/YarisSever/Query/Data/YillikYarisProgramiCoklu",
+    "/TR/YarisSever/Info/Data/GunlukYarisProgrami",
     {
       params: {
-        "QueryParameter_Tarih_Start": today,
-        "QueryParameter_Tarih_End": today,
-        Era: "future",
-        "X-Requested-With": "XMLHttpRequest",
+        QueryParameter_Tarih: today,
+        Era: "tomorrow",
       },
       headers: {
+        "X-Requested-With": "XMLHttpRequest",
         Accept: "*/*",
         Referer:
-          "https://www.tjk.org/TR/YarisSever/Query/Page/YillikYarisProgramiCoklu",
+          "https://www.tjk.org/TR/YarisSever/Info/Page/GunlukYarisProgrami",
       },
     },
   );
@@ -38,21 +38,27 @@ export async function discoverCities(): Promise<CityLink[]> {
   const seen = new Set<string>();
   const cities: CityLink[] = [];
 
-  $(".sorgu-YillikYarisProgramiCoklu-SehirAdi a").each((_i, el) => {
-    const href = $(el).attr("href");
-    const name = $(el).text().trim();
+  $("ul.gunluk-tabs li a").each((_i, el) => {
+    const href = $(el).attr("href") || "";
+    const name = $(el).text().trim().replace(/\s*\(.*\)\s*$/, ""); // "(43. Y.G.)" kısmını kaldır
+    const sehirId = $(el).attr("data-sehir-id") || "";
 
-    if (!href || seen.has(href)) return;
-    seen.add(href);
+    if (!sehirId || seen.has(sehirId)) return;
+
+    // Sadece yerli hipodromları al (SehirId <= 10 — İstanbul, Ankara, İzmir, Bursa, Adana, Antalya, Elazığ, Şanlıurfa, Diyarbakır, Kocaeli)
+    if (parseInt(sehirId, 10) > 10) return;
+
+    seen.add(sehirId);
 
     const fullUrl = href.startsWith("http")
       ? href
-      : `https://www.tjk.org${href}`;
+      : `https://www.tjk.org${href.replace(/&amp;/g, "&")}`;
 
-    cities.push({ cityName: name, url: fullUrl });
+    cities.push({ cityName: name, sehirId, url: fullUrl });
   });
 
-  console.log(`[Discovery] Bugün ${cities.length} şehirde yarış var: ${cities.map((c) => c.cityName).join(", ")}`);
+  console.log(
+    `[Discovery] Bugün ${cities.length} yerli şehirde yarış var: ${cities.map((c) => c.cityName).join(", ")}`,
+  );
   return cities;
 }
-

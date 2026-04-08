@@ -12,67 +12,78 @@ export interface HorseRecord {
 /**
  * Faz 2 — Detaylı AGF Veri Kazıma
  *
- * Bir şehrin yarış detay sayfasından tüm koşuları ve her koşudaki
- * atların isim + AGF oranı bilgisini parse eder.
+ * Bir şehrin yarış verilerini /Info/Sehir/GunlukYarisProgrami AJAX endpoint'inden çeker.
  *
  * HTML yapısı:
- *  - Her koşu .race-details bloğu altında başlar
- *  - At satırları .race-details'ten sonra gelen tablo/satırlarda listelenir
- *  - At ismi: .gunluk-GunlukYarisProgrami-AtAdi
- *  - AGF oranı: .gunluk-GunlukYarisProgrami-AGFORAN a[title] → %(\d+,\d+)
+ *  - Her koşu ayrı bir div[id][sehir] container'ı altında
+ *  - Her container 1 adet .race-details + at tablosu içerir
+ *  - Koşu no/saat: .race-details .race-no a text → "1. Koşu:15.00"
+ *  - At ismi: .gunluk-GunlukYarisProgrami-AtAdi içindeki ilk text node
+ *  - AGF oranı: .gunluk-GunlukYarisProgrami-AGFORAN span veya a
  */
 export async function scrapeCity(
   cityUrl: string,
   cityName: string,
 ): Promise<HorseRecord[]> {
-  const { data: html } = await tjkClient.get(cityUrl);
+  // /Info/Sehir/ AJAX endpoint'ini çağır
+  const { data: html } = await tjkClient.get(cityUrl, {
+    headers: {
+      "X-Requested-With": "XMLHttpRequest",
+      Accept: "*/*",
+      Referer:
+        "https://www.tjk.org/TR/YarisSever/Info/Page/GunlukYarisProgrami",
+    },
+  });
 
   const $ = cheerio.load(html);
   const records: HorseRecord[] = [];
 
-  // Koşu numarası ve saati bilgisi .race-details .race-no a elementinden gelir.
-  // Sayfa yapısı: .race-details bloğundan sonra at satırları gelir,
-  // bir sonraki .race-details bloğuna kadar tüm atlar o koşuya aittir.
+  // Her koşu ayrı bir div[id][sehir] container'ında
+  // (id numerik, sehir attribute'u var olanlar asıl koşu div'leri)
+  $('div[sehir]').each((_i, containerEl) => {
+    const container = $(containerEl);
+    const containerId = container.attr("id") || "";
 
-  // Tüm ilgili elementleri DOM sırasına göre topla
-  const raceHeaders = $(".race-details");
+    // "anc" ile başlayan anchor div'lerini atla — asıl koşu div'leri numerik id taşır
+    if (containerId.startsWith("anc")) return;
 
-  raceHeaders.each((_i, headerEl) => {
-    // Koşu no ve saat parse et: "2.                        Koşu:20.32"
-    const raceText = $(headerEl).find(".race-no a").first().text().trim();
+    // Koşu bilgisi
+    const raceDetails = container.find(".race-details");
+    if (raceDetails.length === 0) return;
+
+    const raceText = raceDetails.find(".race-no a").first().text().trim();
     const raceMatch = raceText.match(/(\d+)\.\s*Koşu[:\s]*(\d+[\.:]\d+)/i);
 
     const raceNo = raceMatch ? parseInt(raceMatch[1], 10) : 0;
     const raceTime = raceMatch ? raceMatch[2].replace(":", ".") : "";
 
-    if (raceNo === 0) return; // Geçersiz koşu
+    if (raceNo === 0) return;
 
-    // Bu .race-details bloğunun parent container'ından at satırlarını bul.
-    // TJK HTML yapısında .race-details ve at tablosu aynı parent altındadır.
-    // headerEl'den sonraki kardeş elementlerden atları çekiyoruz.
-    const parentContainer = $(headerEl).parent();
+    // At satırları — her tr içinde AtAdi ve AGFORAN hücreleri var
+    const rows = container.find("tr");
+    rows.each((_j, rowEl) => {
+      const row = $(rowEl);
+      const atAdiCell = row.find(".gunluk-GunlukYarisProgrami-AtAdi");
+      const agfCell = row.find(".gunluk-GunlukYarisProgrami-AGFORAN");
 
-    // At isimleri ve AGF oranları
-    const horseNameEls = parentContainer.find(
-      ".gunluk-GunlukYarisProgrami-AtAdi",
-    );
-    const agfEls = parentContainer.find(
-      ".gunluk-GunlukYarisProgrami-AGFORAN",
-    );
+      if (atAdiCell.length === 0) return;
 
-    horseNameEls.each((j, nameEl) => {
-      const horseName = $(nameEl).text().trim();
+      // At ismini çek — sadece ilk kısmı al (çerçeve/donanım bilgilerinden ayır)
+      // AtAdi hücresinin yapısı: at ismi + alt satırlarda ekipman bilgileri
+      // İlk satırdaki text'i almak için clone edip child'ları kaldır
+      const horseName = extractHorseName($, atAdiCell);
       if (!horseName) return;
 
-      // AGF oranını karşılık gelen elementten çek
-      const agfEl = agfEls.eq(j);
+      // AGF oranını çek
       let agfRate: number | null = null;
+      if (agfCell.length) {
+        const agfText = agfCell.find("a").attr("title")
+          || agfCell.find("a").text().trim()
+          || agfCell.find("span").text().trim()
+          || agfCell.text().trim();
 
-      if (agfEl.length) {
-        const agfAnchor = agfEl.find("a");
-        const titleAttr = agfAnchor.attr("title") || agfAnchor.text();
-        // "%18,50" veya "18,50" gibi formatlardan sayıyı çek
-        const agfMatch = titleAttr.match(/%?\s*(\d+[.,]\d+)/);
+        // "%18,50" veya "18,50" veya "18.50" formatlarından sayıyı çek
+        const agfMatch = agfText.match(/%?\s*(\d+[.,]\d+)/);
         if (agfMatch) {
           agfRate = parseFloat(agfMatch[1].replace(",", "."));
         }
@@ -94,3 +105,25 @@ export async function scrapeCity(
   return records;
 }
 
+/**
+ * AtAdi hücresinden temiz at ismini çıkarır.
+ * HTML yapısı karmaşık olduğundan, ilk anlamlı text node'u alırız.
+ */
+function extractHorseName($: cheerio.CheerioAPI, cell: cheerio.Cheerio<cheerio.Element>): string {
+  // Hücredeki tüm text'i al ama sadece ilk satırı kullan
+  const fullText = cell.text();
+  // İlk satır at ismi, sonrası ekipman bilgileri
+  const lines = fullText.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  if (lines.length === 0) return "";
+
+  // İlk satır genelde at ismi
+  let name = lines[0];
+
+  // "t1.000.000,00 TL" gibi fiyat bilgilerini temizle
+  name = name.replace(/t[\d.,]+\s*TL.*/i, "").trim();
+  // Kalan ekipman kısaltmalarını temizle (SK, KG, K, DB, GKR gibi 2-3 harfli büyük harf kodları)
+  name = name.replace(/[A-ZÇĞİÖŞÜ]{1,3}[A-Za-zçğıöşü]*\s*(ifade|takılacağını|bağlanacağını|geleceğini).*/g, "").trim();
+
+  return name;
+}
