@@ -171,88 +171,77 @@ export async function getAgfTrends(windowMinutes: number) {
       ? todayStart
       : new Date(now.getTime() - windowMinutes * 60 * 1000);
 
-  // ── 1. Sınır timestamp'lerini bul ────────────────────────
-  const [{ data: firstTsRows }, { data: lastTsRows }] = await Promise.all([
-    supabase
-      .from("agf_history")
-      .select("snapshot_at")
-      .gte("snapshot_at", windowStart.toISOString())
-      .order("snapshot_at", { ascending: true })
-      .limit(1),
-    supabase
-      .from("agf_history")
-      .select("snapshot_at")
-      .gte("snapshot_at", todayStart.toISOString())
-      .order("snapshot_at", { ascending: false })
-      .limit(1),
-  ]);
+  // ── 1. Bugünün son snapshot_at'ını bul ───────────────────
+  const { data: lastTsRows } = await supabase
+    .from("agf_history")
+    .select("snapshot_at")
+    .gte("snapshot_at", todayStart.toISOString())
+    .order("snapshot_at", { ascending: false })
+    .limit(1);
 
-  if (!firstTsRows?.length || !lastTsRows?.length) {
+  if (!lastTsRows?.length) {
     return { trends: [], firstSnapshot: null, lastSnapshot: null };
   }
 
-  const firstTs = firstTsRows[0].snapshot_at as string;
-  const lastTs  = lastTsRows[0].snapshot_at  as string;
+  const lastTs = lastTsRows[0].snapshot_at as string;
 
-  // ── 2. İki snapshot'ın tüm verilerini çek ────────────────
-  const [{ data: firstData }, { data: lastData }] = await Promise.all([
-    supabase.from("agf_history").select("*").eq("snapshot_at", firstTs),
-    supabase.from("agf_history").select("*").eq("snapshot_at", lastTs),
-  ]);
+  // ── 2. Son snapshot'taki tüm atları çek (Güncel AGF) ─────
+  const { data: lastData } = await supabase
+    .from("agf_history")
+    .select("*")
+    .eq("snapshot_at", lastTs);
 
-  type Row = NonNullable<typeof firstData>[0];
-
-  // İlk snapshot'tan at → ilk satır map'i
-  const firstMap = new Map<string, Row>();
-  for (const row of firstData ?? []) {
-    firstMap.set(`${row.city}|${row.race_no}|${row.horse_name}`, row);
+  if (!lastData?.length) {
+    return { trends: [], firstSnapshot: null, lastSnapshot: lastTs };
   }
 
-  // ── 3. Son snapshot'ta olup ilk snapshot'ta olmayan atlar ─
-  if (firstTs !== lastTs) {
-    const missingRows = (lastData ?? []).filter(
-      (r) => !firstMap.has(`${r.city}|${r.race_no}|${r.horse_name}`),
-    );
+  // ── 3. Her koşu için, her atın penceredeki ilk NULL OLMAYAN kaydını bul ──
+  type Row = NonNullable<typeof lastData>[0];
+  const firstMap = new Map<string, Row>();
 
-    if (missingRows.length > 0) {
-      // Koşu bazında grupla, her koşu için tek bir fallback sorgu yap
-      const raceKeys = [
-        ...new Set(missingRows.map((r) => `${r.city}||${r.race_no}`)),
-      ];
+  const raceKeys = [...new Set(lastData.map((r) => `${r.city}||${r.race_no}`))];
 
-      await Promise.all(
-        raceKeys.map(async (rk) => {
-          const [city, raceNoStr] = rk.split("||");
-          const race_no = parseInt(raceNoStr, 10);
+  await Promise.all(
+    raceKeys.map(async (rk) => {
+      const [city, raceNoStr] = rk.split("||");
+      const race_no = parseInt(raceNoStr, 10);
 
-          const { data: earlyRows } = await supabase
-            .from("agf_history")
-            .select("*")
-            .eq("city", city)
-            .eq("race_no", race_no)
-            .gte("snapshot_at", windowStart.toISOString())
-            .order("snapshot_at", { ascending: true })
-            .limit(200); // koşu başına at sayısı ~ 10-20, 200 birkaç snapshot karşılar
+      // agf_rate IS NOT NULL filtresi + artan sıra → ilk karşılaşılan = en eski geçerli değer
+      const { data: earlyRows } = await supabase
+        .from("agf_history")
+        .select("*")
+        .eq("city", city)
+        .eq("race_no", race_no)
+        .gte("snapshot_at", windowStart.toISOString())
+        .not("agf_rate", "is", null)
+        .order("snapshot_at", { ascending: true })
+        .limit(500);
 
-          for (const row of earlyRows ?? []) {
-            const key = `${row.city}|${row.race_no}|${row.horse_name}`;
-            if (!firstMap.has(key)) {
-              firstMap.set(key, row); // zaten artan sırada: ilk karşılaşılan = en eski
-            }
-          }
-        }),
-      );
+      for (const row of earlyRows ?? []) {
+        const key = `${row.city}|${row.race_no}|${row.horse_name}`;
+        if (!firstMap.has(key)) {
+          firstMap.set(key, row); // ascending → ilk = en eski null-olmayan
+        }
+      }
+    }),
+  );
+
+  // ── 4. Bilgi amaçlı: penceredeki en eski geçerli snapshot zamanı ─
+  let firstSnapshot: string | null = null;
+  for (const row of firstMap.values()) {
+    if (!firstSnapshot || row.snapshot_at < firstSnapshot) {
+      firstSnapshot = row.snapshot_at;
     }
   }
 
-  // ── 4. Trend hesapla ─────────────────────────────────────
-  const trends = (lastData ?? []).map((last) => {
+  // ── 5. Trend hesapla ─────────────────────────────────────
+  const trends = lastData.map((last) => {
     const key     = `${last.city}|${last.race_no}|${last.horse_name}`;
     const first   = firstMap.get(key);
     const prevRate    = first?.agf_rate ?? null;
     const currentRate = last.agf_rate;
 
-    // Karşılaştırma: farklı timestamp + null olmayan değerler
+    // Karşılaştırma ancak farklı timestamp'lerde anlamlı
     const hasHistory = !!first && first.snapshot_at !== last.snapshot_at;
 
     let change: number | null    = null;
@@ -280,5 +269,5 @@ export async function getAgfTrends(windowMinutes: number) {
     return (a.agf_rate ?? 0) - (b.agf_rate ?? 0);
   });
 
-  return { trends, firstSnapshot: firstTs, lastSnapshot: lastTs };
+  return { trends, firstSnapshot, lastSnapshot: lastTs };
 }
