@@ -242,10 +242,8 @@ export default function Home() {
               </div>
             )}
 
-            {/* ── Ana İçerik: Tablo + Sağ Panel ── */}
-            <div className="flex flex-col xl:flex-row gap-4">
-              {/* Sol — At Tablosu */}
-              <div className="flex-1 min-w-0 bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+            {/* ── At Tablosu — tam genişlik ── */}
+            <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
                 {/* Trend sekmeleri */}
                 <div className="flex gap-1 border-b border-gray-800 bg-gray-900/80 px-3 pt-3 overflow-x-auto scrollbar-none">
                   {WINDOWS.map(({ key, label }) => (
@@ -269,22 +267,22 @@ export default function Home() {
                     <thead>
                       <tr className="bg-gray-800/60 text-gray-400 uppercase tracking-wider text-[10px]">
                         <th className="px-3 py-2 text-left w-6">N</th>
-                        <th className="px-3 py-2 text-left min-w-[120px]">At İsmi</th>
+                        <th className="px-3 py-2 text-left min-w-[110px]">At İsmi</th>
                         <th className="px-3 py-2 text-center">Yaş</th>
-                        <th className="px-3 py-2 text-left min-w-[140px] hidden md:table-cell">Orijin</th>
+                        <th className="px-3 py-2 text-left min-w-[130px]">Orijin</th>
                         <th className="px-3 py-2 text-center">Kilo</th>
-                        <th className="px-3 py-2 text-left min-w-[100px] hidden sm:table-cell">Jokey</th>
-                        <th className="px-3 py-2 text-left min-w-[100px] hidden lg:table-cell">Sahip</th>
-                        <th className="px-3 py-2 text-left min-w-[100px] hidden lg:table-cell">Antrenör</th>
-                        <th className="px-3 py-2 text-center hidden sm:table-cell">St</th>
-                        <th className="px-3 py-2 text-center hidden sm:table-cell">HP</th>
-                        <th className="px-3 py-2 text-center hidden md:table-cell">Son 6</th>
-                        <th className="px-3 py-2 text-center hidden md:table-cell">KGS</th>
-                        <th className="px-3 py-2 text-center hidden md:table-cell">s20</th>
-                        <th className="px-3 py-2 text-center hidden lg:table-cell">E.İ.D.</th>
-                        <th className="px-3 py-2 text-center hidden md:table-cell">Gny</th>
-                        <th className="px-3 py-2 text-center min-w-[70px]">AGF</th>
-                        <th className="px-3 py-2 text-center min-w-[60px]">Δ AGF</th>
+                        <th className="px-3 py-2 text-left min-w-[90px]">Jokey</th>
+                        <th className="px-3 py-2 text-left min-w-[90px]">Sahip</th>
+                        <th className="px-3 py-2 text-left min-w-[90px]">Antrenör</th>
+                        <th className="px-3 py-2 text-center">St</th>
+                        <th className="px-3 py-2 text-center">HP</th>
+                        <th className="px-3 py-2 text-center">Son 6</th>
+                        <th className="px-3 py-2 text-center">KGS</th>
+                        <th className="px-3 py-2 text-center">s20</th>
+                        <th className="px-3 py-2 text-center min-w-[70px]">E.İ.D.</th>
+                        <th className="px-3 py-2 text-center">Gny</th>
+                        <th className="px-3 py-2 text-center min-w-[65px]">AGF</th>
+                        <th className="px-3 py-2 text-center min-w-[55px]">Δ AGF</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -311,28 +309,28 @@ export default function Home() {
                             >
                               <td className="px-3 py-2 text-gray-500 font-mono">{entry.horse_no}</td>
                               <td className="px-3 py-2 font-semibold text-gray-100">{entry.horse_name}</td>
-                              <td className="px-3 py-2 text-center text-gray-400">{entry.age}</td>
-                              <td className="px-3 py-2 text-gray-400 hidden md:table-cell max-w-[140px] truncate" title={entry.origin}>
+                              <td className="px-3 py-2 text-center text-gray-400 whitespace-nowrap">{entry.age}</td>
+                              <td className="px-3 py-2 text-gray-400 max-w-[130px] truncate" title={entry.origin}>
                                 {entry.origin}
                               </td>
                               <td className="px-3 py-2 text-center font-mono">{entry.weight ?? "—"}</td>
-                              <td className="px-3 py-2 hidden sm:table-cell">
-                                <span className="block text-gray-200">{entry.jockey}</span>
+                              <td className="px-3 py-2">
+                                <span className="block text-gray-200 whitespace-nowrap">{entry.jockey}</span>
                                 {entry.jockey_rank && (
                                   <span className="text-[10px] text-blue-400">{entry.jockey_rank}</span>
                                 )}
                               </td>
-                              <td className="px-3 py-2 text-gray-400 hidden lg:table-cell">{entry.owner}</td>
-                              <td className="px-3 py-2 text-gray-400 hidden lg:table-cell">{entry.trainer}</td>
-                              <td className="px-3 py-2 text-center font-mono hidden sm:table-cell">{entry.start_no}</td>
-                              <td className="px-3 py-2 text-center font-mono hidden sm:table-cell">{entry.hp ?? "—"}</td>
-                              <td className="px-3 py-2 text-center font-mono tracking-widest hidden md:table-cell">
+                              <td className="px-3 py-2 text-gray-400 whitespace-nowrap">{entry.owner}</td>
+                              <td className="px-3 py-2 text-gray-400 whitespace-nowrap">{entry.trainer}</td>
+                              <td className="px-3 py-2 text-center font-mono whitespace-nowrap">{entry.start_no}</td>
+                              <td className="px-3 py-2 text-center font-mono">{entry.hp ?? "—"}</td>
+                              <td className="px-3 py-2 text-center font-mono tracking-widest">
                                 {entry.last_6_races}
                               </td>
-                              <td className="px-3 py-2 text-center font-mono hidden md:table-cell">{entry.kgs ?? "—"}</td>
-                              <td className="px-3 py-2 text-center font-mono hidden md:table-cell">{entry.s20 ?? "—"}</td>
-                              <td className="px-3 py-2 text-center font-mono hidden lg:table-cell">{entry.best_time || "—"}</td>
-                              <td className="px-3 py-2 text-center font-mono hidden md:table-cell">{entry.gny || "—"}</td>
+                              <td className="px-3 py-2 text-center font-mono">{entry.kgs ?? "—"}</td>
+                              <td className="px-3 py-2 text-center font-mono">{entry.s20 ?? "—"}</td>
+                              <td className="px-3 py-2 text-center font-mono whitespace-nowrap">{entry.best_time || "—"}</td>
+                              <td className="px-3 py-2 text-center font-mono">{entry.gny || "—"}</td>
                               {/* AGF */}
                               <td className="px-3 py-2 text-center">
                                 <span className={`font-mono font-bold ${agfBadgeColor(agf)}`}>
@@ -358,55 +356,6 @@ export default function Home() {
                   </table>
                 </div>
               </div>
-
-              {/* Sağ — Koşu Özeti Kartı */}
-              {selectedRace && (
-                <aside className="xl:w-72 shrink-0 bg-gray-900 rounded-xl border border-gray-800 p-4 space-y-3 h-fit">
-                  <h3 className="text-sm font-semibold text-emerald-400 border-b border-gray-800 pb-2">
-                    Koşu Bilgisi
-                  </h3>
-                  <InfoRow label="Şehir" value={selectedRace.city} />
-                  <InfoRow label="Koşu No" value={`${selectedRace.race_no}. Koşu`} />
-                  <InfoRow label="Saat" value={selectedRace.race_time} />
-                  <InfoRow label="Tür" value={selectedRace.race_type || "—"} />
-                  <InfoRow label="Kategori" value={selectedRace.horse_category || "—"} />
-                  <InfoRow
-                    label="Mesafe"
-                    value={selectedRace.distance ? `${selectedRace.distance} m` : "—"}
-                  />
-                  <InfoRow label="Pist" value={selectedRace.track_surface || "—"} />
-                  <InfoRow label="E.İ.D." value={selectedRace.eid || "—"} />
-                  <div className="pt-2 border-t border-gray-800">
-                    <h4 className="text-xs text-gray-500 mb-2 uppercase tracking-wider">AGF Özeti</h4>
-                    {(() => {
-                      const raceEntries = selectedEntries
-                        .map((e) => {
-                          const tk = `${e.city}|${e.race_no}|${e.horse_name}`;
-                          return { name: e.horse_name, ...trendMap.get(tk) };
-                        })
-                        .filter((e) => e.agf_rate != null)
-                        .sort((a, b) => (a.agf_rate ?? 999) - (b.agf_rate ?? 999))
-                        .slice(0, 5);
-                      return raceEntries.length > 0 ? (
-                        <ul className="space-y-1">
-                          {raceEntries.map((e, i) => (
-                            <li key={e.name} className="flex justify-between items-center text-xs">
-                              <span className={`font-medium ${i === 0 ? "text-yellow-400" : "text-gray-300"}`}>
-                                {i + 1}. {e.name}
-                              </span>
-                              <span className={`font-mono font-bold ${agfBadgeColor(e.agf_rate ?? null)}`}>
-                                %{e.agf_rate?.toFixed(2)}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="text-gray-600 text-xs">AGF verisi bekleniyor…</p>
-                      );
-                    })()}
-                  </div>
-                </aside>
-              )}
             </div>
           </>
         )}
@@ -419,14 +368,6 @@ export default function Home() {
 //  Yardımcı bileşenler & fonksiyonlar
 // ─────────────────────────────────────────────────
 
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between items-start gap-2 text-xs">
-      <span className="text-gray-500 shrink-0">{label}</span>
-      <span className="text-gray-200 text-right">{value}</span>
-    </div>
-  );
-}
 
 function agfBadgeColor(rate: number | null): string {
   if (rate === null) return "text-gray-500";
