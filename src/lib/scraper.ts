@@ -17,6 +17,7 @@ export interface RaceRecord {
   eid: string;
   rawConditions: string;
   isAltiliStart: boolean;  // "6'LI GANYAN Bu koşudan başlar" metni bulundu mu
+  altiliIndex: number;     // 0 = altılı başlangıcı değil, 1 = 1.Altılı, 2 = 2.Altılı, ...
 }
 
 export interface HorseRecord {
@@ -124,7 +125,7 @@ export async function scrapeCity(
     const isAltiliStart = /6['\u2018\u2019\u0060]?LI\s+GANYAN\s+Bu\s+ko[şs]udan\s+ba[şs]lar/i
       .test(raceDetailsText);
 
-    races.push({ city: cityName, raceNo, raceDate, raceTime, raceType, horseCategory, distance, trackSurface, eid, rawConditions, isAltiliStart });
+    races.push({ city: cityName, raceNo, raceDate, raceTime, raceType, horseCategory, distance, trackSurface, eid, rawConditions, isAltiliStart, altiliIndex: 0 });
 
     // ── At Satırları ─────────────────────────────────────
     container.find("tr").each((_j, rowEl) => {
@@ -248,6 +249,21 @@ export async function scrapeCity(
   console.log(
     `[Scraper] ${cityName}: ${races.length} koşu, ${horses.length} at kaydı çekildi.`,
   );
+
+  // Altılı ganyan index ataması: aynı şehirde 1. Altılı, 2. Altılı, vb.
+  // Races zaten koşu numarasına göre sıralı gelir (HTML sırası).
+  let altiliCounter = 0;
+  for (const race of races) {
+    if (race.isAltiliStart) {
+      altiliCounter++;
+      race.altiliIndex = altiliCounter;
+    }
+  }
+
+  if (altiliCounter > 0) {
+    console.log(`[Scraper] ${cityName}: ${altiliCounter} altılı ganyan başlangıcı tespit edildi.`);
+  }
+
   return { races, horses };
 }
 

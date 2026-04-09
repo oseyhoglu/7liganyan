@@ -29,6 +29,8 @@ export interface RaceRow {
   track_surface: string;
   eid: string;
   raw_conditions: string;
+  is_altili_start: boolean;  // Bu koşu altılı ganyan başlangıcı mı?
+  altili_index: number;      // 0 = değil, 1 = 1.Altılı, 2 = 2.Altılı, ...
 }
 
 export interface RaceEntryRow {

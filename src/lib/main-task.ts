@@ -10,23 +10,34 @@ import {
 } from "./supabase";
 
 /**
- * Altılı ganyan başlangıç saatini UTC + 5dk tolerans olarak döner.
- * HTML'de "6'LI GANYAN Bu koşudan başlar" işaretli koşuyu bulur.
- * Bulunamazsa null döner (o şehirde AGF kesimi yapılmaz).
+ * Şehirdeki TÜM altılı ganyan başlangıçlarından en geç olanın
+ * UTC kesim saatini (+5 dk tolerans) döner.
+ *
+ * Birden fazla altılı varsa (1.Altılı + 2.Altılı), AGF son altılı
+ * başlayana kadar toplanmaya devam eder.
+ * Hiç altılı yoksa null döner.
  */
-function getAltiliCutoffUtc(races: RaceRecord[], raceDate: string): Date | null {
-  const startRace = races.find((r) => r.isAltiliStart);
-  if (!startRace) return null;
+function getLatestAltiliCutoffUtc(races: RaceRecord[], raceDate: string): Date | null {
+  const altiliRaces = races.filter((r) => r.isAltiliStart);
+  if (altiliRaces.length === 0) return null;
 
-  // "15.30" → "15:30"
-  const [hStr, mStr] = startRace.raceTime.split(".");
-  const hh = hStr.padStart(2, "0");
-  const mm = (mStr ?? "00").padStart(2, "0");
+  let latestCutoff: Date | null = null;
 
-  // Türkiye UTC+3 → UTC, +5 dk tolerans
-  const cutoff = new Date(`${raceDate}T${hh}:${mm}:00+03:00`);
-  cutoff.setMinutes(cutoff.getMinutes() + 5);
-  return cutoff;
+  for (const startRace of altiliRaces) {
+    const [hStr, mStr] = startRace.raceTime.split(".");
+    const hh = hStr.padStart(2, "0");
+    const mm = (mStr ?? "00").padStart(2, "0");
+
+    // Türkiye UTC+3 → UTC, +5 dk tolerans
+    const cutoff = new Date(`${raceDate}T${hh}:${mm}:00+03:00`);
+    cutoff.setMinutes(cutoff.getMinutes() + 5);
+
+    if (!latestCutoff || cutoff > latestCutoff) {
+      latestCutoff = cutoff;
+    }
+  }
+
+  return latestCutoff;
 }
 
 /**
@@ -78,16 +89,18 @@ export async function runScrapeTask(): Promise<{
 
   // 3a. races — upsert (koşu bilgileri her zaman güncellenir)
   const raceRows: RaceRow[] = allRaces.map((r) => ({
-    city:           r.city,
-    race_no:        r.raceNo,
-    race_date:      r.raceDate,
-    race_time:      r.raceTime,
-    race_type:      r.raceType,
-    horse_category: r.horseCategory,
-    distance:       r.distance,
-    track_surface:  r.trackSurface,
-    eid:            r.eid,
-    raw_conditions: r.rawConditions,
+    city:             r.city,
+    race_no:          r.raceNo,
+    race_date:        r.raceDate,
+    race_time:        r.raceTime,
+    race_type:        r.raceType,
+    horse_category:   r.horseCategory,
+    distance:         r.distance,
+    track_surface:    r.trackSurface,
+    eid:              r.eid,
+    raw_conditions:   r.rawConditions,
+    is_altili_start:  r.isAltiliStart,
+    altili_index:     r.altiliIndex,
   }));
   await upsertRaces(raceRows);
 
@@ -122,7 +135,7 @@ export async function runScrapeTask(): Promise<{
 
   for (const city of cities) {
     const cityRaces = allRaces.filter((r) => r.city === city.cityName);
-    const cutoff    = getAltiliCutoffUtc(cityRaces, raceDate);
+    const cutoff    = getLatestAltiliCutoffUtc(cityRaces, raceDate);
 
     if (cutoff && snapshotNow > cutoff) {
       agfBlockedCities.add(city.cityName);
