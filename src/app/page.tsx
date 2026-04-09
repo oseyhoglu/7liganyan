@@ -7,6 +7,9 @@ import { useState, useEffect, useCallback } from "react";
 // ─────────────────────────────────────────────────
 
 type WindowKey = "opening" | "1h" | "30m" | "15m" | "5m";
+type SortCol =
+  | "horse_no" | "horse_name" | "weight" | "hp"
+  | "kgs" | "s20" | "gny" | "agf" | "change" | "start_no";
 
 interface RaceRow {
   id: number;
@@ -96,6 +99,17 @@ export default function Home() {
   const [selectedCity, setSelectedCity] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sortCol, setSortCol] = useState<SortCol | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  function handleSort(col: SortCol) {
+    if (sortCol === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(col);
+      setSortDir("asc");
+    }
+  }
 
   // AGF trendi map: "city|race_no|horse_name" → TrendRow
   const trendMap = new Map<string, TrendRow>();
@@ -146,6 +160,36 @@ export default function Home() {
   const selectedEntries = racesData?.entries
     .filter((e) => `${e.city}|${e.race_no}` === selectedRaceKey)
     .sort((a, b) => (a.horse_no ?? 99) - (b.horse_no ?? 99)) ?? [];
+
+  // Sıralanmış at listesi
+  const sortedEntries = sortCol
+    ? [...selectedEntries].sort((a, b) => {
+        const aTrend = trendMap.get(`${a.city}|${a.race_no}|${a.horse_name}`);
+        const bTrend = trendMap.get(`${b.city}|${b.race_no}|${b.horse_name}`);
+        let av: number | string | null = null;
+        let bv: number | string | null = null;
+        switch (sortCol) {
+          case "horse_no":  av = a.horse_no;            bv = b.horse_no;            break;
+          case "horse_name": av = a.horse_name;          bv = b.horse_name;          break;
+          case "weight":    av = a.weight;              bv = b.weight;              break;
+          case "hp":        av = a.hp;                  bv = b.hp;                  break;
+          case "kgs":       av = a.kgs;                 bv = b.kgs;                 break;
+          case "s20":       av = a.s20;                 bv = b.s20;                 break;
+          case "gny":       av = parseFloat(a.gny || "0"); bv = parseFloat(b.gny || "0"); break;
+          case "start_no":  av = parseInt(a.start_no || "0"); bv = parseInt(b.start_no || "0"); break;
+          case "agf":       av = aTrend?.agf_rate ?? null; bv = bTrend?.agf_rate ?? null; break;
+          case "change":    av = aTrend?.change ?? null;    bv = bTrend?.change ?? null;    break;
+        }
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        const cmp =
+          typeof av === "string"
+            ? av.localeCompare(bv as string, "tr")
+            : (av as number) - (bv as number);
+        return sortDir === "asc" ? cmp : -cmp;
+      })
+    : selectedEntries;
 
   const lastSnapshotTime = trendsData?.lastSnapshot
     ? new Date(trendsData.lastSnapshot).toLocaleTimeString("tr-TR")
@@ -313,27 +357,27 @@ export default function Home() {
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-gray-800/60 text-gray-400 uppercase tracking-wider text-[10px]">
-                        <th className="px-3 py-2 text-left w-6">N</th>
-                        <th className="px-3 py-2 text-left min-w-[120px]">At İsmi</th>
+                        <Th col="horse_no"  label="N"        sc={sortCol} sd={sortDir} onSort={handleSort} className="text-left w-6" />
+                        <Th col="horse_name" label="At İsmi" sc={sortCol} sd={sortDir} onSort={handleSort} className="text-left min-w-[120px]" />
                         <th className="px-3 py-2 text-center">Yaş</th>
                         <th className="px-3 py-2 text-left min-w-[140px] hidden md:table-cell">Orijin</th>
-                        <th className="px-3 py-2 text-center">Kilo</th>
+                        <Th col="weight"    label="Kilo"     sc={sortCol} sd={sortDir} onSort={handleSort} className="text-center" />
                         <th className="px-3 py-2 text-left min-w-[100px] hidden sm:table-cell">Jokey</th>
                         <th className="px-3 py-2 text-left min-w-[100px] hidden lg:table-cell">Sahip</th>
                         <th className="px-3 py-2 text-left min-w-[100px] hidden lg:table-cell">Antrenör</th>
-                        <th className="px-3 py-2 text-center hidden sm:table-cell">St</th>
-                        <th className="px-3 py-2 text-center hidden sm:table-cell">HP</th>
+                        <Th col="start_no"  label="St"       sc={sortCol} sd={sortDir} onSort={handleSort} className="text-center hidden sm:table-cell" />
+                        <Th col="hp"        label="HP"       sc={sortCol} sd={sortDir} onSort={handleSort} className="text-center hidden sm:table-cell" />
                         <th className="px-3 py-2 text-center hidden md:table-cell">Son 6</th>
-                        <th className="px-3 py-2 text-center hidden md:table-cell">KGS</th>
-                        <th className="px-3 py-2 text-center hidden md:table-cell">s20</th>
+                        <Th col="kgs"       label="KGS"      sc={sortCol} sd={sortDir} onSort={handleSort} className="text-center hidden md:table-cell" />
+                        <Th col="s20"       label="s20"      sc={sortCol} sd={sortDir} onSort={handleSort} className="text-center hidden md:table-cell" />
                         <th className="px-3 py-2 text-center hidden lg:table-cell">E.İ.D.</th>
-                        <th className="px-3 py-2 text-center hidden md:table-cell">Gny</th>
-                        <th className="px-3 py-2 text-center min-w-[70px]">AGF</th>
-                        <th className="px-3 py-2 text-center min-w-[60px]">Δ AGF</th>
+                        <Th col="gny"       label="Gny"      sc={sortCol} sd={sortDir} onSort={handleSort} className="text-center hidden md:table-cell" />
+                        <Th col="agf"       label="AGF"      sc={sortCol} sd={sortDir} onSort={handleSort} className="text-center min-w-[70px]" />
+                        <Th col="change"    label="Δ AGF"    sc={sortCol} sd={sortDir} onSort={handleSort} className="text-center min-w-[60px]" />
                       </tr>
                     </thead>
                     <tbody>
-                      {selectedEntries.length === 0 ? (
+                      {sortedEntries.length === 0 ? (
                         <tr>
                           <td colSpan={17} className="px-4 py-10 text-center text-gray-500">
                             {racesData?.races.length === 0
@@ -342,7 +386,7 @@ export default function Home() {
                           </td>
                         </tr>
                       ) : (
-                        selectedEntries.map((entry) => {
+                        sortedEntries.map((entry) => {
                           const tk = `${entry.city}|${entry.race_no}|${entry.horse_name}`;
                           const trend = trendMap.get(tk);
                           const agf = trend?.agf_rate ?? null;
@@ -389,7 +433,7 @@ export default function Home() {
                                 {showChange && change !== null ? (
                                   <span className={changeColor(change)}>
                                     {change > 0 ? "▲" : change < 0 ? "▼" : "●"}{" "}
-                                    {Math.abs(change).toFixed(2)}
+                                    %{Math.abs(change).toFixed(2)}
                                   </span>
                                 ) : (
                                   <span className="text-gray-600">—</span>
@@ -473,15 +517,44 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function agfBadgeColor(rate: number | null): string {
-  if (rate === null) return "text-gray-500";
-  if (rate <= 10) return "text-emerald-400";
-  if (rate <= 20) return "text-yellow-400";
-  return "text-orange-400";
+/** Sıralanabilir başlık hücresi */
+function Th({
+  col, label, sc, sd, onSort, className,
+}: {
+  col: SortCol;
+  label: string;
+  sc: SortCol | null;
+  sd: "asc" | "desc";
+  onSort: (c: SortCol) => void;
+  className?: string;
+}) {
+  const active = sc === col;
+  return (
+    <th
+      onClick={() => onSort(col)}
+      className={`px-3 py-2 cursor-pointer select-none hover:text-gray-200 transition-colors whitespace-nowrap ${className ?? ""}`}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        <span className={`text-[9px] ${active ? "text-emerald-400" : "text-gray-600"}`}>
+          {active ? (sd === "asc" ? "▲" : "▼") : "⇅"}
+        </span>
+      </span>
+    </th>
+  );
 }
 
+/** AGF rengi: yüksek = yeşil (iyi), düşük = kırmızı (kötü) */
+function agfBadgeColor(rate: number | null): string {
+  if (rate === null) return "text-gray-500";
+  if (rate >= 20) return "text-emerald-400";
+  if (rate >= 10) return "text-yellow-400";
+  return "text-red-400";
+}
+
+/** Δ AGF rengi: artış = yeşil (olumlu), düşüş = kırmızı (olumsuz) */
 function changeColor(val: number): string {
-  if (val > 0) return "text-red-400";
-  if (val < 0) return "text-emerald-400";
+  if (val > 0) return "text-emerald-400";
+  if (val < 0) return "text-red-400";
   return "text-gray-500";
 }
