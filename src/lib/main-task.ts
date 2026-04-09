@@ -10,22 +10,39 @@ import {
 } from "./supabase";
 
 /**
+ * Altılı ganyan başlangıç saatini UTC + 5dk tolerans olarak döner.
+ * HTML'de "6'LI GANYAN Bu koşudan başlar" işaretli koşuyu bulur.
+ * Bulunamazsa null döner (o şehirde AGF kesimi yapılmaz).
+ */
+function getAltiliCutoffUtc(races: RaceRecord[], raceDate: string): Date | null {
+  const startRace = races.find((r) => r.isAltiliStart);
+  if (!startRace) return null;
+
+  // "15.30" → "15:30"
+  const [hStr, mStr] = startRace.raceTime.split(".");
+  const hh = hStr.padStart(2, "0");
+  const mm = (mStr ?? "00").padStart(2, "0");
+
+  // Türkiye UTC+3 → UTC, +5 dk tolerans
+  const cutoff = new Date(`${raceDate}T${hh}:${mm}:00+03:00`);
+  cutoff.setMinutes(cutoff.getMinutes() + 5);
+  return cutoff;
+}
+
+/**
  * Ana görev — Discovery → Scraper → Supabase (3 tablo) zinciri
- *
- * 1. Bugünün yarış şehirlerini keşfeder
- * 2. Her şehrin tüm verilerini kazır (koşu + at + AGF)
- * 3. races ve race_entries'e upsert, agf_history'e insert yapar
  */
 export async function runScrapeTask(): Promise<{
   cities: number;
   records: number;
   inserted: number;
+  skippedCities: string[];
   error: string | null;
 }> {
-  const snapshotAt = new Date().toISOString();
+  const snapshotAt  = new Date().toISOString();
+  const snapshotNow = new Date(snapshotAt);
 
-  // Bugünün tarihi "YYYY-MM-DD" formatında
-  const today = new Date();
+  const today    = new Date();
   const raceDate = today.toISOString().split("T")[0];
 
   // 1. Şehirleri keşfet
@@ -33,11 +50,11 @@ export async function runScrapeTask(): Promise<{
 
   if (cities.length === 0) {
     console.log("[MainTask] Bugün yarış bulunamadı.");
-    return { cities: 0, records: 0, inserted: 0, error: null };
+    return { cities: 0, records: 0, inserted: 0, skippedCities: [], error: null };
   }
 
   // 2. Her şehri kazı
-  const allRaces: RaceRecord[] = [];
+  const allRaces:  RaceRecord[]  = [];
   const allHorses: HorseRecord[] = [];
 
   for (const city of cities) {
@@ -56,65 +73,85 @@ export async function runScrapeTask(): Promise<{
   );
 
   if (allHorses.length === 0) {
-    return { cities: cities.length, records: 0, inserted: 0, error: "Hiç at verisi parse edilemedi" };
+    return { cities: cities.length, records: 0, inserted: 0, skippedCities: [], error: "Hiç at verisi parse edilemedi" };
   }
 
-  // 3a. races — upsert (statik, günde 1 kez değişir)
+  // 3a. races — upsert (koşu bilgileri her zaman güncellenir)
   const raceRows: RaceRow[] = allRaces.map((r) => ({
-    city: r.city,
-    race_no: r.raceNo,
-    race_date: r.raceDate,
-    race_time: r.raceTime,
-    race_type: r.raceType,
+    city:           r.city,
+    race_no:        r.raceNo,
+    race_date:      r.raceDate,
+    race_time:      r.raceTime,
+    race_type:      r.raceType,
     horse_category: r.horseCategory,
-    distance: r.distance,
-    track_surface: r.trackSurface,
-    eid: r.eid,
+    distance:       r.distance,
+    track_surface:  r.trackSurface,
+    eid:            r.eid,
     raw_conditions: r.rawConditions,
   }));
   await upsertRaces(raceRows);
 
-  // 3b. race_entries — upsert (statik, günde 1 kez değişir)
+  // 3b. race_entries — upsert (at bilgileri her zaman güncellenir)
   const entryRows: RaceEntryRow[] = allHorses.map((h) => ({
-    city: h.city,
-    race_no: h.raceNo,
-    race_date: h.raceDate,
-    horse_no: h.horseNo,
-    horse_name: h.horseName,
-    age: h.age,
-    origin: h.origin,
-    weight: h.weight,
-    jockey: h.jockey,
-    jockey_rank: h.jockeyRank,
-    owner: h.owner,
-    trainer: h.trainer,
-    start_no: h.startNo,
-    hp: h.hp,
+    city:         h.city,
+    race_no:      h.raceNo,
+    race_date:    h.raceDate,
+    horse_no:     h.horseNo,
+    horse_name:   h.horseName,
+    age:          h.age,
+    origin:       h.origin,
+    weight:       h.weight,
+    jockey:       h.jockey,
+    jockey_rank:  h.jockeyRank,
+    owner:        h.owner,
+    trainer:      h.trainer,
+    start_no:     h.startNo,
+    hp:           h.hp,
     last_6_races: h.last6Races,
-    kgs: h.kgs,
-    s20: h.s20,
-    best_time: h.bestTime,
-    gny: h.gny,
-    idm_flag: h.idmFlag,
+    kgs:          h.kgs,
+    s20:          h.s20,
+    best_time:    h.bestTime,
+    gny:          h.gny,
+    idm_flag:     h.idmFlag,
   }));
   await upsertRaceEntries(entryRows);
 
-  // 3c. agf_history — insert (zaman serisi, her 5 dk'da eklenir)
-  const agfRows: AgfHistoryRow[] = allHorses.map((h) => ({
-    city: h.city,
-    race_no: h.raceNo,
-    race_time: h.raceTime,
-    horse_name: h.horseName,
-    agf_rate: h.agfRate,
-    snapshot_at: snapshotAt,
-  }));
+  // 3c. agf_history — altılı ganyan başlamış şehirler hariç insert
+  const skippedCities:   string[]   = [];
+  const agfBlockedCities = new Set<string>();
+
+  for (const city of cities) {
+    const cityRaces = allRaces.filter((r) => r.city === city.cityName);
+    const cutoff    = getAltiliCutoffUtc(cityRaces, raceDate);
+
+    if (cutoff && snapshotNow > cutoff) {
+      agfBlockedCities.add(city.cityName);
+      skippedCities.push(city.cityName);
+      console.log(
+        `[MainTask] ${city.cityName}: altılı ganyan başladı ` +
+        `(kesim UTC: ${cutoff.toISOString()}), AGF eklenmeyecek.`,
+      );
+    }
+  }
+
+  const agfRows: AgfHistoryRow[] = allHorses
+    .filter((h) => !agfBlockedCities.has(h.city))
+    .map((h) => ({
+      city:        h.city,
+      race_no:     h.raceNo,
+      race_time:   h.raceTime,
+      horse_name:  h.horseName,
+      agf_rate:    h.agfRate,
+      snapshot_at: snapshotAt,
+    }));
 
   const { count, error } = await insertAgfRecords(agfRows);
 
   return {
-    cities: cities.length,
-    records: allHorses.length,
-    inserted: count,
+    cities:       cities.length,
+    records:      allHorses.length,
+    inserted:     count,
+    skippedCities,
     error,
   };
 }

@@ -16,6 +16,7 @@ export interface RaceRecord {
   trackSurface: string; // "Kum" | "Çim"
   eid: string;
   rawConditions: string;
+  isAltiliStart: boolean;  // "6'LI GANYAN Bu koşudan başlar" metni bulundu mu
 }
 
 export interface HorseRecord {
@@ -117,7 +118,13 @@ export async function scrapeCity(
       ? eidEl.text().replace(/E\.─░\.D\.|E\.İ\.D\.|EİD|:\s*/gi, "").trim()
       : "";
 
-    races.push({ city: cityName, raceNo, raceDate, raceTime, raceType, horseCategory, distance, trackSurface, eid, rawConditions });
+    // "6'LI GANYAN Bu koşudan başlar" metni kontrolü
+    // — .race-details'in tamamında ara (race-no + race-config + ozelKosuAdi dahil)
+    const raceDetailsText = raceDetails.text().replace(/\s+/g, " ");
+    const isAltiliStart = /6['\u2018\u2019\u0060]?LI\s+GANYAN\s+Bu\s+ko[şs]udan\s+ba[şs]lar/i
+      .test(raceDetailsText);
+
+    races.push({ city: cityName, raceNo, raceDate, raceTime, raceType, horseCategory, distance, trackSurface, eid, rawConditions, isAltiliStart });
 
     // ── At Satırları ─────────────────────────────────────
     container.find("tr").each((_j, rowEl) => {
