@@ -265,3 +265,44 @@ export async function getAgfTrends(windowMinutes: number) {
 
   return { trends, firstSnapshot, lastSnapshot: lastTs };
 }
+
+/**
+ * Önceki güne ait tüm verileri siler.
+ *
+ * Silme kriterleri (UTC baz alınır):
+ *   - agf_history : snapshot_at < bugün 00:00 UTC
+ *   - races        : race_date  < bugün
+ *   - race_entries : race_date  < bugün
+ */
+export async function cleanupOldData(): Promise<{
+  agfDeleted: number;
+  racesDeleted: number;
+  entriesDeleted: number;
+  error: string | null;
+}> {
+  const todayUtc = new Date();
+  todayUtc.setUTCHours(0, 0, 0, 0);
+  const todayStr      = todayUtc.toISOString().split("T")[0]; // "YYYY-MM-DD"
+  const todayIso      = todayUtc.toISOString();               // "YYYY-MM-DDT00:00:00.000Z"
+
+  const [agfRes, racesRes, entriesRes] = await Promise.all([
+    supabase.from("agf_history") .delete({ count: "exact" }).lt("snapshot_at", todayIso),
+    supabase.from("races")       .delete({ count: "exact" }).lt("race_date",   todayStr),
+    supabase.from("race_entries").delete({ count: "exact" }).lt("race_date",   todayStr),
+  ]);
+
+  const error =
+    agfRes.error?.message ??
+    racesRes.error?.message ??
+    entriesRes.error?.message ??
+    null;
+
+  if (error) console.error("[Supabase] Temizleme hatası:", error);
+
+  return {
+    agfDeleted:     agfRes.count     ?? 0,
+    racesDeleted:   racesRes.count   ?? 0,
+    entriesDeleted: entriesRes.count ?? 0,
+    error,
+  };
+}
