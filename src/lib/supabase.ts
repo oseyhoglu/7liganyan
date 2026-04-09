@@ -166,11 +166,6 @@ export async function getAgfTrends(windowMinutes: number) {
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
 
-  const windowStart =
-    windowMinutes === 0
-      ? todayStart
-      : new Date(now.getTime() - windowMinutes * 60 * 1000);
-
   // ── 1. Bugünün son snapshot_at'ını bul ───────────────────
   const { data: lastTsRows } = await supabase
     .from("agf_history")
@@ -184,6 +179,13 @@ export async function getAgfTrends(windowMinutes: number) {
   }
 
   const lastTs = lastTsRows[0].snapshot_at as string;
+
+  // windowStart: açılış → bugün gece yarısı; diğerleri → son snapshot'tan geriye
+  // Böylece "Son 5dk" her zaman son snapshot ile 5dk önceki snapshot'ı karşılaştırır.
+  const windowStart =
+    windowMinutes === 0
+      ? todayStart
+      : new Date(new Date(lastTs).getTime() - windowMinutes * 60 * 1000);
 
   // ── 2. Son snapshot'taki tüm atları çek (Güncel AGF) ─────
   const { data: lastData } = await supabase
@@ -206,7 +208,6 @@ export async function getAgfTrends(windowMinutes: number) {
       const [city, raceNoStr] = rk.split("||");
       const race_no = parseInt(raceNoStr, 10);
 
-      // agf_rate IS NOT NULL filtresi + artan sıra → ilk karşılaşılan = en eski geçerli değer
       const { data: earlyRows } = await supabase
         .from("agf_history")
         .select("*")
@@ -220,13 +221,13 @@ export async function getAgfTrends(windowMinutes: number) {
       for (const row of earlyRows ?? []) {
         const key = `${row.city}|${row.race_no}|${row.horse_name}`;
         if (!firstMap.has(key)) {
-          firstMap.set(key, row); // ascending → ilk = en eski null-olmayan
+          firstMap.set(key, row);
         }
       }
     }),
   );
 
-  // ── 4. Bilgi amaçlı: penceredeki en eski geçerli snapshot zamanı ─
+  // ── 4. En eski geçerli snapshot zamanı (bilgi amaçlı) ────
   let firstSnapshot: string | null = null;
   for (const row of firstMap.values()) {
     if (!firstSnapshot || row.snapshot_at < firstSnapshot) {
@@ -236,31 +237,24 @@ export async function getAgfTrends(windowMinutes: number) {
 
   // ── 5. Trend hesapla ─────────────────────────────────────
   const trends = lastData.map((last) => {
-    const key     = `${last.city}|${last.race_no}|${last.horse_name}`;
-    const first   = firstMap.get(key);
+    const key         = `${last.city}|${last.race_no}|${last.horse_name}`;
+    const first       = firstMap.get(key);
     const prevRate    = first?.agf_rate ?? null;
     const currentRate = last.agf_rate;
-
-    // Karşılaştırma ancak farklı timestamp'lerde anlamlı
-    const hasHistory = !!first && first.snapshot_at !== last.snapshot_at;
+    const hasHistory  = !!first && first.snapshot_at !== last.snapshot_at;
 
     let change: number | null    = null;
     let changePct: number | null = null;
 
     if (hasHistory && prevRate !== null && currentRate !== null) {
-      change = parseFloat((currentRate - prevRate).toFixed(2));
+      change    = parseFloat((currentRate - prevRate).toFixed(2));
       changePct =
         prevRate !== 0
           ? parseFloat((((currentRate - prevRate) / prevRate) * 100).toFixed(2))
           : null;
     }
 
-    return {
-      ...last,
-      prev_agf_rate: prevRate,
-      change,
-      change_pct: changePct,
-    };
+    return { ...last, prev_agf_rate: prevRate, change, change_pct: changePct };
   });
 
   trends.sort((a, b) => {
