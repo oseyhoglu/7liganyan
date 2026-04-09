@@ -2,26 +2,79 @@
 
 import { useState, useEffect, useCallback } from "react";
 
+// ─────────────────────────────────────────────────
+//  Tipler
+// ─────────────────────────────────────────────────
+
 type WindowKey = "opening" | "1h" | "30m" | "15m" | "5m";
+
+interface RaceRow {
+  id: number;
+  city: string;
+  race_no: number;
+  race_date: string;
+  race_time: string;
+  race_type: string;
+  horse_category: string;
+  distance: number | null;
+  track_surface: string;
+  eid: string;
+  raw_conditions: string;
+}
+
+interface EntryRow {
+  id: number;
+  city: string;
+  race_no: number;
+  race_date: string;
+  horse_no: number | null;
+  horse_name: string;
+  age: string;
+  origin: string;
+  weight: number | null;
+  jockey: string;
+  jockey_rank: string;
+  owner: string;
+  trainer: string;
+  start_no: string;
+  hp: number | null;
+  last_6_races: string;
+  kgs: number | null;
+  s20: number | null;
+  best_time: string;
+  gny: string;
+  idm_flag: boolean;
+}
 
 interface TrendRow {
   city: string;
   race_no: number;
-  race_time: string;
   horse_name: string;
   agf_rate: number | null;
   prev_agf_rate: number | null;
   change: number | null;
   change_pct: number | null;
+  snapshot_at: string;
+}
+
+interface RacesResponse {
+  date: string;
+  raceCount: number;
+  entryCount: number;
+  races: RaceRow[];
+  entries: EntryRow[];
 }
 
 interface TrendsResponse {
   window: string;
-  count: number;
   firstSnapshot: string | null;
   lastSnapshot: string | null;
   trends: TrendRow[];
 }
+
+// ─────────────────────────────────────────────────
+//  Sabitler
+// ─────────────────────────────────────────────────
 
 const WINDOWS: { key: WindowKey; label: string }[] = [
   { key: "opening", label: "Açılış" },
@@ -31,217 +84,359 @@ const WINDOWS: { key: WindowKey; label: string }[] = [
   { key: "5m", label: "Son 5 dk" },
 ];
 
+// ─────────────────────────────────────────────────
+//  Ana Bileşen
+// ─────────────────────────────────────────────────
+
 export default function Home() {
+  const [racesData, setRacesData] = useState<RacesResponse | null>(null);
+  const [trendsData, setTrendsData] = useState<TrendsResponse | null>(null);
   const [activeWindow, setActiveWindow] = useState<WindowKey>("opening");
-  const [data, setData] = useState<TrendsResponse | null>(null);
+  const [selectedRaceKey, setSelectedRaceKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchTrends = useCallback(async (w: WindowKey) => {
+  // AGF trendi map: "city|race_no|horse_name" → TrendRow
+  const trendMap = new Map<string, TrendRow>();
+  for (const t of trendsData?.trends ?? []) {
+    trendMap.set(`${t.city}|${t.race_no}|${t.horse_name}`, t);
+  }
+
+  const fetchAll = useCallback(async (w: WindowKey) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/trends?window=${w}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: TrendsResponse = await res.json();
-      setData(json);
+      const [racesRes, trendsRes] = await Promise.all([
+        fetch("/api/races"),
+        fetch(`/api/trends?window=${w}`),
+      ]);
+      if (!racesRes.ok) throw new Error(`Races HTTP ${racesRes.status}`);
+      if (!trendsRes.ok) throw new Error(`Trends HTTP ${trendsRes.status}`);
+
+      const races: RacesResponse = await racesRes.json();
+      const trends: TrendsResponse = await trendsRes.json();
+
+      setRacesData(races);
+      setTrendsData(trends);
+
+      // İlk koşuyu otomatik seç
+      if (races.races.length > 0 && selectedRaceKey === null) {
+        const first = races.races[0];
+        setSelectedRaceKey(`${first.city}|${first.race_no}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Veri alınamadı");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedRaceKey]);
 
   useEffect(() => {
-    fetchTrends(activeWindow);
-    const interval = setInterval(() => fetchTrends(activeWindow), 60_000);
+    fetchAll(activeWindow);
+    const interval = setInterval(() => fetchAll(activeWindow), 60_000);
     return () => clearInterval(interval);
-  }, [activeWindow, fetchTrends]);
+  }, [activeWindow, fetchAll]);
 
-  const grouped = groupByRace(data?.trends ?? []);
-  const showChange =
-    data && (data.firstSnapshot !== data.lastSnapshot || activeWindow !== "opening");
+  const selectedRace = racesData?.races.find(
+    (r) => `${r.city}|${r.race_no}` === selectedRaceKey,
+  ) ?? null;
+
+  const selectedEntries = racesData?.entries
+    .filter((e) => `${e.city}|${e.race_no}` === selectedRaceKey)
+    .sort((a, b) => (a.horse_no ?? 99) - (b.horse_no ?? 99)) ?? [];
+
+  const lastSnapshotTime = trendsData?.lastSnapshot
+    ? new Date(trendsData.lastSnapshot).toLocaleTimeString("tr-TR")
+    : null;
+
+  // ─────────────────────────────────────────────────
+  //  Render
+  // ─────────────────────────────────────────────────
 
   return (
-    <main className="flex-1 px-4 py-6 max-w-7xl mx-auto w-full">
-      {/* Header */}
-      <header className="mb-8 text-center">
-        <h1 className="text-3xl font-bold tracking-tight text-emerald-400">
-          🏇 7li Ganyan
-        </h1>
-        <p className="text-gray-400 mt-1 text-sm">
-          TJK AGF Oran Takip &amp; Trend Analizi
-        </p>
-        {data?.lastSnapshot && (
-          <p className="text-gray-500 text-xs mt-2">
-            Son güncelleme:{" "}
-            {new Date(data.lastSnapshot).toLocaleTimeString("tr-TR")}
-          </p>
-        )}
+    <div className="min-h-screen bg-gray-950 text-gray-100">
+      {/* ── Üst Başlık ── */}
+      <header className="bg-gray-900 border-b border-gray-800 sticky top-0 z-30">
+        <div className="max-w-screen-2xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🏇</span>
+            <div>
+              <h1 className="text-lg font-bold text-emerald-400 leading-tight">7li Ganyan</h1>
+              <p className="text-xs text-gray-500">TJK AGF Analiz</p>
+            </div>
+          </div>
+          {lastSnapshotTime && (
+            <span className="text-xs text-gray-500">
+              ⏱ Son güncelleme: {lastSnapshotTime}
+            </span>
+          )}
+        </div>
       </header>
 
-      {/* Zaman Penceresi Sekmeleri */}
-      <nav className="flex gap-2 justify-center mb-6 flex-wrap">
-        {WINDOWS.map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setActiveWindow(key)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeWindow === key
-                ? "bg-emerald-600 text-white shadow-lg"
-                : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
+      <div className="max-w-screen-2xl mx-auto px-4 py-4 flex flex-col gap-4">
+        {/* ── Yükleniyor / Hata ── */}
+        {loading && (
+          <div className="flex items-center justify-center py-20 gap-3 text-gray-400">
+            <span className="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+            Veriler yükleniyor…
+          </div>
+        )}
+        {error && (
+          <div className="text-center py-10 text-red-400">
+            ⚠️ {error}
+            <button onClick={() => fetchAll(activeWindow)} className="ml-3 underline text-emerald-400 text-sm">
+              Tekrar dene
+            </button>
+          </div>
+        )}
 
-      {/* Yükleniyor */}
-      {loading && (
-        <div className="text-center py-20 text-gray-400">
-          <div className="inline-block w-8 h-8 border-4 border-emerald-400 border-t-transparent rounded-full animate-spin mb-4" />
-          <p>Veriler yükleniyor…</p>
-        </div>
-      )}
+        {!loading && !error && (
+          <>
+            {/* ── Koşu Listesi (yatay kaydırılabilir chip'ler) ── */}
+            <nav className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+              {racesData?.races.map((race) => {
+                const key = `${race.city}|${race.race_no}`;
+                const isActive = selectedRaceKey === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedRaceKey(key)}
+                    className={`flex-shrink-0 px-3 py-2 rounded-lg text-xs font-medium transition-colors border ${
+                      isActive
+                        ? "bg-emerald-600 border-emerald-500 text-white shadow-lg"
+                        : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700 hover:text-gray-200"
+                    }`}
+                  >
+                    <span className="block font-bold">{race.city}</span>
+                    <span className="block">{race.race_no}. Koşu — {race.race_time}</span>
+                  </button>
+                );
+              })}
+              {racesData?.races.length === 0 && (
+                <p className="text-gray-500 text-sm py-2">
+                  📭 Bugün için koşu verisi bulunamadı.
+                </p>
+              )}
+            </nav>
 
-      {/* Hata */}
-      {error && (
-        <div className="text-center py-20">
-          <p className="text-red-400 mb-2">⚠️ {error}</p>
-          <button
-            onClick={() => fetchTrends(activeWindow)}
-            className="text-emerald-400 underline text-sm"
-          >
-            Tekrar dene
-          </button>
-        </div>
-      )}
-
-      {/* Veri yok */}
-      {!loading && !error && data && data.trends.length === 0 && (
-        <div className="text-center py-20 text-gray-500">
-          <p className="text-5xl mb-4">📭</p>
-          <p>Bu zaman penceresi için veri bulunamadı.</p>
-          <p className="text-sm mt-2">
-            Henüz veri toplanmamış olabilir. Scraper çalıştığında veriler burada
-            görünecek.
-          </p>
-        </div>
-      )}
-
-      {/* Koşu Kartları */}
-      {!loading && !error && grouped.length > 0 && (
-        <div className="space-y-8">
-          {grouped.map((group) => (
-            <section
-              key={`${group.city}-${group.raceNo}`}
-              className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden"
-            >
-              <div className="bg-gray-800 px-4 py-3 flex items-center justify-between">
-                <h2 className="font-semibold text-emerald-400">
-                  📍 {group.city} — {group.raceNo}. Koşu
-                </h2>
-                <span className="text-gray-400 text-sm">🕐 {group.raceTime}</span>
+            {/* ── Seçili Koşu Başlığı ── */}
+            {selectedRace && (
+              <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+                <div className="flex flex-wrap gap-x-6 gap-y-1 items-baseline">
+                  <h2 className="text-base font-bold text-emerald-400">
+                    📍 {selectedRace.city} — {selectedRace.race_no}. Koşu
+                  </h2>
+                  <span className="text-gray-400 text-sm">🕐 {selectedRace.race_time}</span>
+                  {selectedRace.race_type && (
+                    <span className="text-yellow-400 text-xs font-medium bg-yellow-400/10 px-2 py-0.5 rounded">
+                      {selectedRace.race_type}
+                    </span>
+                  )}
+                </div>
+                <p className="text-gray-400 text-xs mt-2">
+                  {selectedRace.horse_category}
+                  {selectedRace.distance && ` · ${selectedRace.distance}m`}
+                  {selectedRace.track_surface && ` · ${selectedRace.track_surface}`}
+                  {selectedRace.eid && ` · E.İ.D: ${selectedRace.eid}`}
+                </p>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
-                      <th className="text-left px-4 py-2">#</th>
-                      <th className="text-left px-4 py-2">At</th>
-                      <th className="text-right px-4 py-2">AGF</th>
-                      {showChange && (
-                        <>
-                          <th className="text-right px-4 py-2">Önceki</th>
-                          <th className="text-right px-4 py-2">Değişim</th>
-                          <th className="text-right px-4 py-2">%</th>
-                        </>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {group.horses.map((horse, idx) => (
-                      <tr
-                        key={horse.horse_name}
-                        className="border-b border-gray-800/50 hover:bg-gray-800/50 transition-colors"
-                      >
-                        <td className="px-4 py-2 text-gray-500">{idx + 1}</td>
-                        <td className="px-4 py-2 font-medium">{horse.horse_name}</td>
-                        <td className="px-4 py-2 text-right font-mono">
-                          {horse.agf_rate?.toFixed(2) ?? "—"}
-                        </td>
-                        {showChange && (
-                          <>
-                            <td className="px-4 py-2 text-right font-mono text-gray-500">
-                              {horse.prev_agf_rate?.toFixed(2) ?? "—"}
-                            </td>
-                            <td
-                              className={`px-4 py-2 text-right font-mono ${changeColor(horse.change)}`}
-                            >
-                              {formatChange(horse.change)}
-                            </td>
-                            <td
-                              className={`px-4 py-2 text-right font-mono ${changeColor(horse.change_pct)}`}
-                            >
-                              {formatPct(horse.change_pct)}
-                            </td>
-                          </>
-                        )}
+            )}
+
+            {/* ── Ana İçerik: Tablo + Sağ Panel ── */}
+            <div className="flex flex-col xl:flex-row gap-4">
+              {/* Sol — At Tablosu */}
+              <div className="flex-1 min-w-0 bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                {/* Trend sekmeleri */}
+                <div className="flex gap-1 border-b border-gray-800 bg-gray-900/80 px-3 pt-3 overflow-x-auto scrollbar-none">
+                  {WINDOWS.map(({ key, label }) => (
+                    <button
+                      key={key}
+                      onClick={() => setActiveWindow(key)}
+                      className={`flex-shrink-0 px-3 py-1.5 rounded-t-lg text-xs font-medium transition-colors mb-0 border-b-2 ${
+                        activeWindow === key
+                          ? "border-emerald-400 text-emerald-400 bg-gray-800"
+                          : "border-transparent text-gray-500 hover:text-gray-300"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Tablo */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-gray-800/60 text-gray-400 uppercase tracking-wider text-[10px]">
+                        <th className="px-3 py-2 text-left w-6">N</th>
+                        <th className="px-3 py-2 text-left min-w-[120px]">At İsmi</th>
+                        <th className="px-3 py-2 text-center">Yaş</th>
+                        <th className="px-3 py-2 text-left min-w-[140px] hidden md:table-cell">Orijin</th>
+                        <th className="px-3 py-2 text-center">Kilo</th>
+                        <th className="px-3 py-2 text-left min-w-[100px] hidden sm:table-cell">Jokey</th>
+                        <th className="px-3 py-2 text-left min-w-[100px] hidden lg:table-cell">Sahip</th>
+                        <th className="px-3 py-2 text-left min-w-[100px] hidden lg:table-cell">Antrenör</th>
+                        <th className="px-3 py-2 text-center hidden sm:table-cell">St</th>
+                        <th className="px-3 py-2 text-center hidden sm:table-cell">HP</th>
+                        <th className="px-3 py-2 text-center hidden md:table-cell">Son 6</th>
+                        <th className="px-3 py-2 text-center hidden md:table-cell">KGS</th>
+                        <th className="px-3 py-2 text-center hidden md:table-cell">s20</th>
+                        <th className="px-3 py-2 text-center hidden lg:table-cell">E.İ.D.</th>
+                        <th className="px-3 py-2 text-center hidden md:table-cell">Gny</th>
+                        <th className="px-3 py-2 text-center min-w-[70px]">AGF</th>
+                        <th className="px-3 py-2 text-center min-w-[60px]">Δ AGF</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {selectedEntries.length === 0 ? (
+                        <tr>
+                          <td colSpan={17} className="px-4 py-10 text-center text-gray-500">
+                            {racesData?.races.length === 0
+                              ? "Bugün yarış verisi yok"
+                              : "Koşu seçin veya veri bekleniyor…"}
+                          </td>
+                        </tr>
+                      ) : (
+                        selectedEntries.map((entry) => {
+                          const tk = `${entry.city}|${entry.race_no}|${entry.horse_name}`;
+                          const trend = trendMap.get(tk);
+                          const agf = trend?.agf_rate ?? null;
+                          const change = trend?.change ?? null;
+                          const showChange = trendsData?.firstSnapshot !== trendsData?.lastSnapshot;
+
+                          return (
+                            <tr
+                              key={entry.id}
+                              className="border-b border-gray-800/50 hover:bg-gray-800/40 transition-colors"
+                            >
+                              <td className="px-3 py-2 text-gray-500 font-mono">{entry.horse_no}</td>
+                              <td className="px-3 py-2 font-semibold text-gray-100">{entry.horse_name}</td>
+                              <td className="px-3 py-2 text-center text-gray-400">{entry.age}</td>
+                              <td className="px-3 py-2 text-gray-400 hidden md:table-cell max-w-[140px] truncate" title={entry.origin}>
+                                {entry.origin}
+                              </td>
+                              <td className="px-3 py-2 text-center font-mono">{entry.weight ?? "—"}</td>
+                              <td className="px-3 py-2 hidden sm:table-cell">
+                                <span className="block text-gray-200">{entry.jockey}</span>
+                                {entry.jockey_rank && (
+                                  <span className="text-[10px] text-blue-400">{entry.jockey_rank}</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-gray-400 hidden lg:table-cell">{entry.owner}</td>
+                              <td className="px-3 py-2 text-gray-400 hidden lg:table-cell">{entry.trainer}</td>
+                              <td className="px-3 py-2 text-center font-mono hidden sm:table-cell">{entry.start_no}</td>
+                              <td className="px-3 py-2 text-center font-mono hidden sm:table-cell">{entry.hp ?? "—"}</td>
+                              <td className="px-3 py-2 text-center font-mono tracking-widest hidden md:table-cell">
+                                {entry.last_6_races}
+                              </td>
+                              <td className="px-3 py-2 text-center font-mono hidden md:table-cell">{entry.kgs ?? "—"}</td>
+                              <td className="px-3 py-2 text-center font-mono hidden md:table-cell">{entry.s20 ?? "—"}</td>
+                              <td className="px-3 py-2 text-center font-mono hidden lg:table-cell">{entry.best_time || "—"}</td>
+                              <td className="px-3 py-2 text-center font-mono hidden md:table-cell">{entry.gny || "—"}</td>
+                              {/* AGF */}
+                              <td className="px-3 py-2 text-center">
+                                <span className={`font-mono font-bold ${agfBadgeColor(agf)}`}>
+                                  {agf != null ? `%${agf.toFixed(2)}` : "—"}
+                                </span>
+                              </td>
+                              {/* Δ AGF */}
+                              <td className="px-3 py-2 text-center font-mono">
+                                {showChange && change !== null ? (
+                                  <span className={changeColor(change)}>
+                                    {change > 0 ? "▲" : change < 0 ? "▼" : "●"}{" "}
+                                    {Math.abs(change).toFixed(2)}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-600">—</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </section>
-          ))}
-        </div>
-      )}
-    </main>
+
+              {/* Sağ — Koşu Özeti Kartı */}
+              {selectedRace && (
+                <aside className="xl:w-72 shrink-0 bg-gray-900 rounded-xl border border-gray-800 p-4 space-y-3 h-fit">
+                  <h3 className="text-sm font-semibold text-emerald-400 border-b border-gray-800 pb-2">
+                    Koşu Bilgisi
+                  </h3>
+                  <InfoRow label="Şehir" value={selectedRace.city} />
+                  <InfoRow label="Koşu No" value={`${selectedRace.race_no}. Koşu`} />
+                  <InfoRow label="Saat" value={selectedRace.race_time} />
+                  <InfoRow label="Tür" value={selectedRace.race_type || "—"} />
+                  <InfoRow label="Kategori" value={selectedRace.horse_category || "—"} />
+                  <InfoRow
+                    label="Mesafe"
+                    value={selectedRace.distance ? `${selectedRace.distance} m` : "—"}
+                  />
+                  <InfoRow label="Pist" value={selectedRace.track_surface || "—"} />
+                  <InfoRow label="E.İ.D." value={selectedRace.eid || "—"} />
+                  <div className="pt-2 border-t border-gray-800">
+                    <h4 className="text-xs text-gray-500 mb-2 uppercase tracking-wider">AGF Özeti</h4>
+                    {(() => {
+                      const raceEntries = selectedEntries
+                        .map((e) => {
+                          const tk = `${e.city}|${e.race_no}|${e.horse_name}`;
+                          return { name: e.horse_name, ...trendMap.get(tk) };
+                        })
+                        .filter((e) => e.agf_rate != null)
+                        .sort((a, b) => (a.agf_rate ?? 999) - (b.agf_rate ?? 999))
+                        .slice(0, 5);
+                      return raceEntries.length > 0 ? (
+                        <ul className="space-y-1">
+                          {raceEntries.map((e, i) => (
+                            <li key={e.name} className="flex justify-between items-center text-xs">
+                              <span className={`font-medium ${i === 0 ? "text-yellow-400" : "text-gray-300"}`}>
+                                {i + 1}. {e.name}
+                              </span>
+                              <span className={`font-mono font-bold ${agfBadgeColor(e.agf_rate ?? null)}`}>
+                                %{e.agf_rate?.toFixed(2)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-gray-600 text-xs">AGF verisi bekleniyor…</p>
+                      );
+                    })()}
+                  </div>
+                </aside>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
-/* —— Yardımcı Fonksiyonlar —— */
+// ─────────────────────────────────────────────────
+//  Yardımcı bileşenler & fonksiyonlar
+// ─────────────────────────────────────────────────
 
-interface RaceGroup {
-  city: string;
-  raceNo: number;
-  raceTime: string;
-  horses: TrendRow[];
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between items-start gap-2 text-xs">
+      <span className="text-gray-500 shrink-0">{label}</span>
+      <span className="text-gray-200 text-right">{value}</span>
+    </div>
+  );
 }
 
-function groupByRace(trends: TrendRow[]): RaceGroup[] {
-  const map = new Map<string, RaceGroup>();
-  for (const row of trends) {
-    const key = `${row.city}|${row.race_no}`;
-    if (!map.has(key)) {
-      map.set(key, {
-        city: row.city,
-        raceNo: row.race_no,
-        raceTime: row.race_time,
-        horses: [],
-      });
-    }
-    map.get(key)!.horses.push(row);
-  }
-  return Array.from(map.values());
+function agfBadgeColor(rate: number | null): string {
+  if (rate === null) return "text-gray-500";
+  if (rate <= 10) return "text-emerald-400";
+  if (rate <= 20) return "text-yellow-400";
+  return "text-orange-400";
 }
 
-function changeColor(val: number | null): string {
-  if (val === null) return "text-gray-500";
+function changeColor(val: number): string {
   if (val > 0) return "text-red-400";
   if (val < 0) return "text-emerald-400";
   return "text-gray-500";
-}
-
-function formatChange(val: number | null): string {
-  if (val === null) return "—";
-  const sign = val > 0 ? "+" : "";
-  return `${sign}${val.toFixed(2)}`;
-}
-
-function formatPct(val: number | null): string {
-  if (val === null) return "—";
-  const sign = val > 0 ? "+" : "";
-  return `${sign}${val.toFixed(1)}%`;
 }

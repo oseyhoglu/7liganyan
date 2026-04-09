@@ -3,10 +3,11 @@ import { createClient } from "@supabase/supabase-js";
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
 
-/**
- * Supabase client — server-side (API route'lar ve lib katmanı) kullanımı için.
- */
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// ─────────────────────────────────────────────────
+//  Row Tipleri
+// ─────────────────────────────────────────────────
 
 export interface AgfHistoryRow {
   city: string;
@@ -14,19 +15,52 @@ export interface AgfHistoryRow {
   race_time: string;
   horse_name: string;
   agf_rate: number | null;
-  snapshot_at: string; // ISO 8601 timestamp
+  snapshot_at: string;
+}
+
+export interface RaceRow {
+  city: string;
+  race_no: number;
+  race_date: string;
+  race_time: string;
+  race_type: string;
+  horse_category: string;
+  distance: number | null;
+  track_surface: string;
+  eid: string;
+  raw_conditions: string;
+}
+
+export interface RaceEntryRow {
+  city: string;
+  race_no: number;
+  race_date: string;
+  horse_no: number | null;
+  horse_name: string;
+  age: string;
+  origin: string;
+  weight: number | null;
+  jockey: string;
+  jockey_rank: string;
+  owner: string;
+  trainer: string;
+  start_no: string;
+  hp: number | null;
+  last_6_races: string;
+  kgs: number | null;
+  s20: number | null;
+  best_time: string;
+  gny: string;
+  idm_flag: boolean;
 }
 
 /**
  * AGF kayıtlarını toplu olarak agf_history tablosuna ekler.
- * Aynı snapshot_at değeri tüm kayıtlara atanır — tutarlı gruplama için.
  */
 export async function insertAgfRecords(
   rows: AgfHistoryRow[],
 ): Promise<{ count: number; error: string | null }> {
-  if (rows.length === 0) {
-    return { count: 0, error: null };
-  }
+  if (rows.length === 0) return { count: 0, error: null };
 
   const { data, error } = await supabase
     .from("agf_history")
@@ -38,8 +72,81 @@ export async function insertAgfRecords(
     return { count: 0, error: error.message };
   }
 
-  console.log(`[Supabase] ${data?.length ?? 0} kayıt eklendi.`);
+  console.log(`[Supabase] ${data?.length ?? 0} AGF kaydı eklendi.`);
   return { count: data?.length ?? 0, error: null };
+}
+
+/**
+ * Koşu bilgilerini races tablosuna upsert eder.
+ * Unique key: (city, race_no, race_date)
+ */
+export async function upsertRaces(
+  rows: RaceRow[],
+): Promise<{ count: number; error: string | null }> {
+  if (rows.length === 0) return { count: 0, error: null };
+
+  const { data, error } = await supabase
+    .from("races")
+    .upsert(rows, { onConflict: "city,race_no,race_date", ignoreDuplicates: false })
+    .select();
+
+  if (error) {
+    console.error("[Supabase] races upsert hatası:", error.message);
+    return { count: 0, error: error.message };
+  }
+
+  console.log(`[Supabase] ${data?.length ?? 0} koşu kaydı upsert edildi.`);
+  return { count: data?.length ?? 0, error: null };
+}
+
+/**
+ * At kayıtlarını race_entries tablosuna upsert eder.
+ * Unique key: (city, race_no, race_date, horse_name)
+ */
+export async function upsertRaceEntries(
+  rows: RaceEntryRow[],
+): Promise<{ count: number; error: string | null }> {
+  if (rows.length === 0) return { count: 0, error: null };
+
+  const { data, error } = await supabase
+    .from("race_entries")
+    .upsert(rows, { onConflict: "city,race_no,race_date,horse_name", ignoreDuplicates: false })
+    .select();
+
+  if (error) {
+    console.error("[Supabase] race_entries upsert hatası:", error.message);
+    return { count: 0, error: error.message };
+  }
+
+  console.log(`[Supabase] ${data?.length ?? 0} at kaydı upsert edildi.`);
+  return { count: data?.length ?? 0, error: null };
+}
+
+/**
+ * Bugünün tüm koşu ve at verilerini getirir (frontend /api/races için).
+ */
+export async function getRacesWithEntries(dateStr: string) {
+  const [racesResult, entriesResult] = await Promise.all([
+    supabase
+      .from("races")
+      .select("*")
+      .eq("race_date", dateStr)
+      .order("city")
+      .order("race_no"),
+    supabase
+      .from("race_entries")
+      .select("*")
+      .eq("race_date", dateStr)
+      .order("city")
+      .order("race_no")
+      .order("horse_no"),
+  ]);
+
+  return {
+    races: racesResult.data ?? [],
+    entries: entriesResult.data ?? [],
+    error: racesResult.error?.message ?? entriesResult.error?.message ?? null,
+  };
 }
 
 /**

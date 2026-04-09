@@ -14,35 +14,37 @@ async function main() {
     return;
   }
 
-  // İlk şehri test et
   const city = cities[0];
+  const today = new Date().toISOString().split("T")[0];
   console.log(`\n🔍 ${city.cityName} sayfası kazınıyor...`);
   console.log(`   URL: ${city.url}\n`);
 
-  const records = await scrapeCity(city.url, city.cityName);
+  const result = await scrapeCity(city.url, city.cityName, today);
 
-  if (records.length === 0) {
-    console.log("❌ Hiç at verisi parse edilemedi! HTML yapısı kontrol edilmeli.");
+  console.log(`\n📋 Koşu sayısı: ${result.races.length}`);
+  result.races.forEach((r) =>
+    console.log(`  ${r.raceNo}. Koşu ${r.raceTime} — ${r.raceType} · ${r.distance}m ${r.trackSurface}`),
+  );
+
+  console.log(`\n🐴 At kaydı: ${result.horses.length}`);
+  if (result.horses.length === 0) {
+    console.log("❌ Hiç at verisi parse edilemedi!");
   } else {
-    console.log(`✅ ${records.length} at kaydı bulundu:\n`);
-
-    // İlk 10 kaydı göster
-    const preview = records.slice(0, 10);
+    const preview = result.horses.slice(0, 10);
     console.table(
-      preview.map((r) => ({
-        Şehir: r.city,
-        "Koşu No": r.raceNo,
-        Saat: r.raceTime,
-        At: r.horseName,
-        AGF: r.agfRate,
+      preview.map((h) => ({
+        Koşu: h.raceNo,
+        "N": h.horseNo,
+        At: h.horseName,
+        Jokey: h.jockey,
+        Kilo: h.weight,
+        AGF: h.agfRate,
       })),
     );
-
-    if (records.length > 10) {
-      console.log(`  ... ve ${records.length - 10} kayıt daha.`);
+    if (result.horses.length > 10) {
+      console.log(`  ... ve ${result.horses.length - 10} kayıt daha.`);
     }
   }
 }
 
 main();
-

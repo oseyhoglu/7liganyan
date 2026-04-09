@@ -1,31 +1,70 @@
 import * as cheerio from "cheerio";
 import tjkClient from "./axios-client";
 
+// ─────────────────────────────────────────────────
+//  Tipler
+// ─────────────────────────────────────────────────
+
+export interface RaceRecord {
+  city: string;
+  raceNo: number;
+  raceDate: string;     // "YYYY-MM-DD"
+  raceTime: string;     // "15.00"
+  raceType: string;     // "SATIŞ 1", "ŞARTLI 4/DİÖW" vb.
+  horseCategory: string;
+  distance: number | null;
+  trackSurface: string; // "Kum" | "Çim"
+  eid: string;
+  rawConditions: string;
+}
+
 export interface HorseRecord {
   city: string;
   raceNo: number;
+  raceDate: string;
   raceTime: string;
+  horseNo: number | null;
   horseName: string;
+  age: string;
+  origin: string;        // "BABA - ANNE"
+  weight: number | null; // Siklet
+  jockey: string;
+  jockeyRank: string;    // "A1", "APApranti" vb.
+  owner: string;
+  trainer: string;
+  startNo: string;
+  hp: number | null;
+  last6Races: string;
+  kgs: number | null;
+  s20: number | null;
+  bestTime: string;
+  gny: string;
   agfRate: number | null;
+  idmFlag: boolean;
 }
 
+export interface ScrapeResult {
+  races: RaceRecord[];
+  horses: HorseRecord[];
+}
+
+// ─────────────────────────────────────────────────
+//  Ana fonksiyon
+// ─────────────────────────────────────────────────
+
 /**
- * Faz 2 — Detaylı AGF Veri Kazıma
+ * Faz 2 — Tam Veri Kazıma
  *
- * Bir şehrin yarış verilerini /Info/Sehir/GunlukYarisProgrami AJAX endpoint'inden çeker.
- *
- * HTML yapısı:
- *  - Her koşu ayrı bir div[id][sehir] container'ı altında
- *  - Her container 1 adet .race-details + at tablosu içerir
- *  - Koşu no/saat: .race-details .race-no a text → "1. Koşu:15.00"
- *  - At ismi: .gunluk-GunlukYarisProgrami-AtAdi içindeki ilk text node
- *  - AGF oranı: .gunluk-GunlukYarisProgrami-AGFORAN span veya a
+ * Selector referansı (debug-fields.ts ile doğrulandı):
+ *   SiraId, AtAdi, Yas, Baba, Kilo, JokeAdi, SahipAdi,
+ *   AntronorAdi, StartId, Hc, Son6Yaris, KGS, s20,
+ *   DERECE, Gny, AGFORAN, idmanpistiFLG
  */
 export async function scrapeCity(
   cityUrl: string,
   cityName: string,
-): Promise<HorseRecord[]> {
-  // /Info/Sehir/ AJAX endpoint'ini çağır
+  raceDate: string,
+): Promise<ScrapeResult> {
   const { data: html } = await tjkClient.get(cityUrl, {
     headers: {
       "X-Requested-With": "XMLHttpRequest",
@@ -36,108 +75,198 @@ export async function scrapeCity(
   });
 
   const $ = cheerio.load(html);
-  const records: HorseRecord[] = [];
+  const races: RaceRecord[] = [];
+  const horses: HorseRecord[] = [];
 
-  // Her koşu ayrı bir div[id][sehir] container'ında
-  // (id numerik, sehir attribute'u var olanlar asıl koşu div'leri)
-  $('div[sehir]').each((_i, containerEl) => {
+  $("div[sehir]").each((_i, containerEl) => {
     const container = $(containerEl);
     const containerId = container.attr("id") || "";
-
-    // "anc" ile başlayan anchor div'lerini atla — asıl koşu div'leri numerik id taşır
     if (containerId.startsWith("anc")) return;
 
-    // Koşu bilgisi
     const raceDetails = container.find(".race-details");
     if (raceDetails.length === 0) return;
 
+    // ── Koşu No ve Saat ──────────────────────────────────
     const raceText = raceDetails.find(".race-no a").first().text().trim();
     const raceMatch = raceText.match(/(\d+)\.\s*Koşu[:\s]*(\d+[\.:]\d+)/i);
+    if (!raceMatch) return;
 
-    const raceNo = raceMatch ? parseInt(raceMatch[1], 10) : 0;
-    const raceTime = raceMatch ? raceMatch[2].replace(":", ".") : "";
+    const raceNo = parseInt(raceMatch[1], 10);
+    const raceTime = raceMatch[2].replace(":", ".");
 
-    if (raceNo === 0) return;
+    // ── Koşul Bilgileri ──────────────────────────────────
+    const raceConfig = raceDetails.find(".race-config");
+    const rawConditions = raceConfig.text().replace(/\s+/g, " ").trim();
+    const raceType = raceConfig.find(".aciklamaFancy").first().text().trim();
 
-    // At satırları — her tr içinde AtAdi ve AGFORAN hücreleri var
-    const rows = container.find("tr");
-    rows.each((_j, rowEl) => {
+    // Mesafe + Pist
+    const distMatch = rawConditions.match(/\b(\d{3,4})\b\s*(Kum|Çim|çim|kum)?/i);
+    const distance = distMatch ? parseInt(distMatch[1], 10) : null;
+    const trackSurface = distMatch?.[2]
+      ? distMatch[2].charAt(0).toUpperCase() + distMatch[2].slice(1).toLowerCase()
+      : "";
+
+    // At kategorisi — raceType'tan sonraki ilk virgülden önceki metin
+    const condAfterType = rawConditions.replace(raceType, "").replace(/^[\s,]+/, "").trim();
+    const catMatch = condAfterType.match(/^([^,\d]+)/);
+    const horseCategory = catMatch ? catMatch[1].trim().replace(/,$/, "") : "";
+
+    // E.İ.D.
+    const eidEl = raceConfig.find("a[href*='GunlukYarisSonuclari']");
+    const eid = eidEl.length
+      ? eidEl.text().replace(/E\.─░\.D\.|E\.İ\.D\.|EİD|:\s*/gi, "").trim()
+      : "";
+
+    races.push({ city: cityName, raceNo, raceDate, raceTime, raceType, horseCategory, distance, trackSurface, eid, rawConditions });
+
+    // ── At Satırları ─────────────────────────────────────
+    container.find("tr").each((_j, rowEl) => {
       const row = $(rowEl);
-      const atAdiCell = row.find(".gunluk-GunlukYarisProgrami-AtAdi");
-      const agfCell = row.find(".gunluk-GunlukYarisProgrami-AGFORAN");
+      if (row.find(".gunluk-GunlukYarisProgrami-AtAdi").length === 0) return;
 
-      if (atAdiCell.length === 0) return;
-
-      // At ismini çek — sadece ilk kısmı al (çerçeve/donanım bilgilerinden ayır)
-      // AtAdi hücresinin yapısı: at ismi + alt satırlarda ekipman bilgileri
-      // İlk satırdaki text'i almak için clone edip child'ları kaldır
-      const horseName = extractHorseName(atAdiCell.text());
+      const horseName = extractHorseName(
+        row.find(".gunluk-GunlukYarisProgrami-AtAdi").text(),
+      );
       if (!horseName) return;
 
-      // AGF oranını çek
-      let agfRate: number | null = null;
-      if (agfCell.length) {
-        const agfText = agfCell.find("a").attr("title")
-          || agfCell.find("a").text().trim()
-          || agfCell.find("span").text().trim()
-          || agfCell.text().trim();
+      const siraText = row.find(".gunluk-GunlukYarisProgrami-SiraId").text().trim();
+      const horseNo = siraText ? parseInt(siraText, 10) : null;
 
-        // "%18,50" veya "18,50" veya "18.50" formatlarından sayıyı çek
+      const age = row.find(".gunluk-GunlukYarisProgrami-Yas").text().trim();
+
+      const origin = row
+        .find(".gunluk-GunlukYarisProgrami-Baba")
+        .text()
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const kiloText = row
+        .find(".gunluk-GunlukYarisProgrami-Kilo")
+        .text()
+        .trim()
+        .replace(",", ".");
+      const weight = kiloText ? parseFloat(kiloText) : null;
+
+      // Jokey — isim ve rütbe ayrı satırlarda gelir
+      const jokeLines = row
+        .find(".gunluk-GunlukYarisProgrami-JokeAdi")
+        .text()
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const jockey = jokeLines[0] || "";
+      const jockeyRank = jokeLines.slice(1).join(" ").trim();
+
+      const owner = row.find(".gunluk-GunlukYarisProgrami-SahipAdi").text().trim();
+      // TJK HTML'de "AntronorAdi" (typo) — aynen kullanılır
+      const trainer = row.find(".gunluk-GunlukYarisProgrami-AntronorAdi").text().trim();
+
+      // StartId — direkt text node (üst yazılar/sup hariç)
+      const startCell = row.find(".gunluk-GunlukYarisProgrami-StartId");
+      const startBase = startCell.clone().children().remove().end().text().trim();
+      const startSup = startCell.find("sup.tooltipp .aciklamaFancy").text().trim();
+      const startNo = startBase + (startSup ? startSup : "");
+
+      const hcText = row.find(".gunluk-GunlukYarisProgrami-Hc").text().trim();
+      const hp = hcText ? parseInt(hcText, 10) : null;
+
+      const last6Races = row
+        .find(".gunluk-GunlukYarisProgrami-Son6Yaris")
+        .text()
+        .replace(/\s+/g, "")
+        .trim();
+
+      const kgsText = row.find(".gunluk-GunlukYarisProgrami-KGS").text().trim();
+      const kgs = kgsText ? parseInt(kgsText, 10) : null;
+
+      const s20Text = row.find(".gunluk-GunlukYarisProgrami-s20").text().trim();
+      const s20 = s20Text ? parseInt(s20Text, 10) : null;
+
+      const bestTime = row
+        .find(".gunluk-GunlukYarisProgrami-DERECE")
+        .text()
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const gny = row
+        .find(".gunluk-GunlukYarisProgrami-Gny")
+        .text()
+        .replace(/\s+/g, " ")
+        .trim();
+
+      // AGF Oranı
+      let agfRate: number | null = null;
+      const agfCell = row.find(".gunluk-GunlukYarisProgrami-AGFORAN");
+      if (agfCell.length) {
+        const agfText =
+          agfCell.find("a").attr("title") ||
+          agfCell.find("a").text().trim() ||
+          agfCell.find("span").text().trim() ||
+          agfCell.text().trim();
         const agfMatch = agfText.match(/%?\s*(\d+[.,]\d+)/);
-        if (agfMatch) {
-          agfRate = parseFloat(agfMatch[1].replace(",", "."));
-        }
+        if (agfMatch) agfRate = parseFloat(agfMatch[1].replace(",", "."));
       }
 
-      records.push({
+      // İdman Flag
+      const idmCell = row.find(".gunluk-GunlukYarisProgrami-idmanpistiFLG");
+      const idmFlag = idmCell.length > 0 && idmCell.text().trim().length > 0;
+
+      horses.push({
         city: cityName,
         raceNo,
+        raceDate,
         raceTime,
+        horseNo,
         horseName,
+        age,
+        origin,
+        weight,
+        jockey,
+        jockeyRank,
+        owner,
+        trainer,
+        startNo,
+        hp,
+        last6Races,
+        kgs,
+        s20,
+        bestTime,
+        gny,
         agfRate,
+        idmFlag,
       });
     });
   });
 
   console.log(
-    `[Scraper] ${cityName}: ${records.length} at kaydı çekildi.`,
+    `[Scraper] ${cityName}: ${races.length} koşu, ${horses.length} at kaydı çekildi.`,
   );
-  return records;
+  return { races, horses };
 }
 
-/**
- * AtAdi hücresinden temiz at ismini çıkarır.
- * HTML yapısı: at ismi + fiyat bilgisi + ekipman açıklamaları karışık gelir.
- * Stratejimiz: İlk temiz satırı al, fiyat/ekipman bilgilerini temizle.
- */
-function extractHorseName(cellText: string): string {
-  const fullText = cellText;
+// ─────────────────────────────────────────────────
+//  Yardımcı
+// ─────────────────────────────────────────────────
 
-  // Satırlara böl, boşlukları temizle, boş olanları at
-  const lines = fullText.split("\n").map((l) => l.trim()).filter(Boolean);
+function extractHorseName(cellText: string): string {
+  const lines = cellText
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
   if (lines.length === 0) return "";
 
-  // İlk satır at ismi — ama bazen fiyat bilgisi de ilk satırda gelir
-  // "t1.000.000,00 TL..." şeklindeki fiyat satırlarını atla
   let name = "";
   for (const line of lines) {
-    // Fiyat satırı değilse ve çok kısa değilse kullan
     if (!/^t[\d.,]+\s*TL/i.test(line) && line.length >= 2) {
       name = line;
       break;
     }
   }
-
   if (!name) return "";
 
-  // Satır içinde fiyat bilgisi varsa o noktadan kes: "KAANER t1.000.000,00 TL..."
   name = name.replace(/\s+t[\d.,]+\s*TL.*/i, "").trim();
-
-  // Ekipman kısaltma açıklamalarını temizle
   name = name.replace(/\s*(ifade|takılacağını|bağlanacağını|geleceğini).*/gi, "").trim();
-
-  // Sonunda sadece büyük harf kısaltmalar kalırsa temizle (SK, KG, DB, GKR, KKR...)
-  name = name.replace(/\s+[A-ZÇĞİÖŞÜ]{2,3}(?:\s+[A-ZÇĞİÖŞÜ]{2,3})*\s*$/, "").trim();
+  name = name.replace(/\s+[A-ZÇĞİÖŞÜ]{2,4}(?:\s+[A-ZÇĞİÖŞÜ]{2,4})*\s*$/, "").trim();
 
   return name;
 }
