@@ -71,7 +71,7 @@ export async function scrapeCity(
       // At ismini çek — sadece ilk kısmı al (çerçeve/donanım bilgilerinden ayır)
       // AtAdi hücresinin yapısı: at ismi + alt satırlarda ekipman bilgileri
       // İlk satırdaki text'i almak için clone edip child'ları kaldır
-      const horseName = extractHorseName($, atAdiCell);
+      const horseName = extractHorseName(atAdiCell.text());
       if (!horseName) return;
 
       // AGF oranını çek
@@ -107,23 +107,37 @@ export async function scrapeCity(
 
 /**
  * AtAdi hücresinden temiz at ismini çıkarır.
- * HTML yapısı karmaşık olduğundan, ilk anlamlı text node'u alırız.
+ * HTML yapısı: at ismi + fiyat bilgisi + ekipman açıklamaları karışık gelir.
+ * Stratejimiz: İlk temiz satırı al, fiyat/ekipman bilgilerini temizle.
  */
-function extractHorseName($: cheerio.CheerioAPI, cell: cheerio.Cheerio<cheerio.Element>): string {
-  // Hücredeki tüm text'i al ama sadece ilk satırı kullan
-  const fullText = cell.text();
-  // İlk satır at ismi, sonrası ekipman bilgileri
-  const lines = fullText.split("\n").map((l) => l.trim()).filter(Boolean);
+function extractHorseName(cellText: string): string {
+  const fullText = cellText;
 
+  // Satırlara böl, boşlukları temizle, boş olanları at
+  const lines = fullText.split("\n").map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return "";
 
-  // İlk satır genelde at ismi
-  let name = lines[0];
+  // İlk satır at ismi — ama bazen fiyat bilgisi de ilk satırda gelir
+  // "t1.000.000,00 TL..." şeklindeki fiyat satırlarını atla
+  let name = "";
+  for (const line of lines) {
+    // Fiyat satırı değilse ve çok kısa değilse kullan
+    if (!/^t[\d.,]+\s*TL/i.test(line) && line.length >= 2) {
+      name = line;
+      break;
+    }
+  }
 
-  // "t1.000.000,00 TL" gibi fiyat bilgilerini temizle
-  name = name.replace(/t[\d.,]+\s*TL.*/i, "").trim();
-  // Kalan ekipman kısaltmalarını temizle (SK, KG, K, DB, GKR gibi 2-3 harfli büyük harf kodları)
-  name = name.replace(/[A-ZÇĞİÖŞÜ]{1,3}[A-Za-zçğıöşü]*\s*(ifade|takılacağını|bağlanacağını|geleceğini).*/g, "").trim();
+  if (!name) return "";
+
+  // Satır içinde fiyat bilgisi varsa o noktadan kes: "KAANER t1.000.000,00 TL..."
+  name = name.replace(/\s+t[\d.,]+\s*TL.*/i, "").trim();
+
+  // Ekipman kısaltma açıklamalarını temizle
+  name = name.replace(/\s*(ifade|takılacağını|bağlanacağını|geleceğini).*/gi, "").trim();
+
+  // Sonunda sadece büyük harf kısaltmalar kalırsa temizle (SK, KG, DB, GKR, KKR...)
+  name = name.replace(/\s+[A-ZÇĞİÖŞÜ]{2,3}(?:\s+[A-ZÇĞİÖŞÜ]{2,3})*\s*$/, "").trim();
 
   return name;
 }
