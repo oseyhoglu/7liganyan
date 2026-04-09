@@ -361,7 +361,7 @@ export default function Home() {
 
               {/* Sağ — Koşu Özeti Kartı */}
               {selectedRace && (
-                <aside className="xl:w-72 shrink-0 bg-gray-900 rounded-xl border border-gray-800 p-4 space-y-3 h-fit">
+                <aside className="xl:hidden shrink-0 bg-gray-900 rounded-xl border border-gray-800 p-4 space-y-3 h-fit">
                   <h3 className="text-sm font-semibold text-emerald-400 border-b border-gray-800 pb-2">
                     Koşu Bilgisi
                   </h3>
