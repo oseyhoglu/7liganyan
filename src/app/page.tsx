@@ -93,6 +93,7 @@ export default function Home() {
   const [trendsData, setTrendsData] = useState<TrendsResponse | null>(null);
   const [activeWindow, setActiveWindow] = useState<WindowKey>("opening");
   const [selectedRaceKey, setSelectedRaceKey] = useState<string | null>(null);
+  const [selectedCity, setSelectedCity] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -119,9 +120,10 @@ export default function Home() {
       setRacesData(races);
       setTrendsData(trends);
 
-      // İlk koşuyu otomatik seç
+      // İlk koşuyu ve şehri otomatik seç
       if (races.races.length > 0 && selectedRaceKey === null) {
         const first = races.races[0];
+        setSelectedCity(first.city);
         setSelectedRaceKey(`${first.city}|${first.race_no}`);
       }
     } catch (err) {
@@ -192,32 +194,75 @@ export default function Home() {
 
         {!loading && !error && (
           <>
-            {/* ── Koşu Listesi (yatay kaydırılabilir chip'ler) ── */}
-            <nav className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-              {racesData?.races.map((race) => {
-                const key = `${race.city}|${race.race_no}`;
-                const isActive = selectedRaceKey === key;
-                return (
-                  <button
-                    key={key}
-                    onClick={() => setSelectedRaceKey(key)}
-                    className={`flex-shrink-0 px-3 py-2 rounded-lg text-xs font-medium transition-colors border ${
-                      isActive
-                        ? "bg-emerald-600 border-emerald-500 text-white shadow-lg"
-                        : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700 hover:text-gray-200"
-                    }`}
-                  >
-                    <span className="block font-bold">{race.city}</span>
-                    <span className="block">{race.race_no}. Koşu — {race.race_time}</span>
-                  </button>
-                );
-              })}
-              {racesData?.races.length === 0 && (
-                <p className="text-gray-500 text-sm py-2">
-                  📭 Bugün için koşu verisi bulunamadı.
-                </p>
-              )}
-            </nav>
+            {/* ── Navigasyon: Şehir + Koşu ── */}
+            {racesData && racesData.races.length > 0 && (() => {
+              // Benzersiz şehirler (sıralı)
+              const cities = [...new Set(racesData.races.map((r) => r.city))];
+              const activeCity = selectedCity ?? cities[0];
+              const cityRaces = racesData.races.filter((r) => r.city === activeCity);
+
+              return (
+                <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                  {/* Şehir Seçimi */}
+                  <div className="flex border-b border-gray-800 overflow-x-auto scrollbar-none">
+                    {cities.map((city) => {
+                      const isActive = city === activeCity;
+                      const cityRaceCount = racesData.races.filter((r) => r.city === city).length;
+                      return (
+                        <button
+                          key={city}
+                          onClick={() => {
+                            setSelectedCity(city);
+                            const first = racesData.races.find((r) => r.city === city);
+                            if (first) setSelectedRaceKey(`${first.city}|${first.race_no}`);
+                          }}
+                          className={`flex-shrink-0 flex items-center gap-2 px-4 py-2.5 text-sm font-semibold transition-colors border-b-2 ${
+                            isActive
+                              ? "border-emerald-400 text-emerald-400 bg-gray-800/60"
+                              : "border-transparent text-gray-500 hover:text-gray-200 hover:bg-gray-800/40"
+                          }`}
+                        >
+                          {city}
+                          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ${
+                            isActive ? "bg-emerald-400/20 text-emerald-300" : "bg-gray-700 text-gray-500"
+                          }`}>
+                            {cityRaceCount}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Koşu Seçimi */}
+                  <div className="flex gap-1.5 p-2 overflow-x-auto scrollbar-none flex-wrap">
+                    {cityRaces.map((race) => {
+                      const key = `${race.city}|${race.race_no}`;
+                      const isActive = selectedRaceKey === key;
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => setSelectedRaceKey(key)}
+                          className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            isActive
+                              ? "bg-emerald-600 text-white shadow"
+                              : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200"
+                          }`}
+                        >
+                          <span className="font-bold">{race.race_no}.</span>
+                          <span className="text-[11px] opacity-80">{race.race_time}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {racesData?.races.length === 0 && (
+              <p className="text-gray-500 text-sm py-2">
+                📭 Bugün için koşu verisi bulunamadı.
+              </p>
+            )}
 
             {/* ── Seçili Koşu Başlığı ── */}
             {selectedRace && (
