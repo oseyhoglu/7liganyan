@@ -266,7 +266,6 @@ function extractHorseName(cellText: string): string {
 
   name = name.replace(/\s+t[\d.,]+\s*TL.*/i, "").trim();
   name = name.replace(/\s*(ifade|takılacağını|bağlanacağını|geleceğini).*/gi, "").trim();
-  name = name.replace(/\s+[A-ZÇĞİÖŞÜ]{2,4}(?:\s+[A-ZÇĞİÖŞÜ]{2,4})*\s*$/, "").trim();
 
   return name;
 }
