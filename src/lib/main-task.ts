@@ -10,34 +10,27 @@ import {
 } from "./supabase";
 
 /**
- * Şehirdeki TÜM altılı ganyan başlangıçlarından en geç olanın
- * UTC kesim saatini (+5 dk tolerans) döner.
- *
- * Birden fazla altılı varsa (1.Altılı + 2.Altılı), AGF son altılı
- * başlayana kadar toplanmaya devam eder.
- * Hiç altılı yoksa null döner.
+ * Bir altılı başlangıç koşusu için UTC kesim saatini döner (+5dk tolerans).
  */
-function getLatestAltiliCutoffUtc(races: RaceRecord[], raceDate: string): Date | null {
-  const altiliRaces = races.filter((r) => r.isAltiliStart);
-  if (altiliRaces.length === 0) return null;
+function getAltiliCutoffUtc(startRace: RaceRecord, raceDate: string): Date {
+  const [hStr, mStr] = startRace.raceTime.split(".");
+  const hh = hStr.padStart(2, "0");
+  const mm = (mStr ?? "00").padStart(2, "0");
+  const cutoff = new Date(`${raceDate}T${hh}:${mm}:00+03:00`);
+  cutoff.setMinutes(cutoff.getMinutes() + 5);
+  return cutoff;
+}
 
-  let latestCutoff: Date | null = null;
-
-  for (const startRace of altiliRaces) {
-    const [hStr, mStr] = startRace.raceTime.split(".");
-    const hh = hStr.padStart(2, "0");
-    const mm = (mStr ?? "00").padStart(2, "0");
-
-    // Türkiye UTC+3 → UTC, +5 dk tolerans
-    const cutoff = new Date(`${raceDate}T${hh}:${mm}:00+03:00`);
-    cutoff.setMinutes(cutoff.getMinutes() + 5);
-
-    if (!latestCutoff || cutoff > latestCutoff) {
-      latestCutoff = cutoff;
-    }
+/**
+ * Bir koşunun hangi altılı grubuna ait olduğunu döner.
+ * 0 = herhangi bir altılı grubuna ait değil (altılı başlamadan önceki koşular)
+ */
+function getAltiliGroup(raceNo: number, altiliStarts: RaceRecord[]): number {
+  let group = 0;
+  for (const start of [...altiliStarts].sort((a, b) => a.raceNo - b.raceNo)) {
+    if (raceNo >= start.raceNo) group = start.altiliIndex;
   }
-
-  return latestCutoff;
+  return group;
 }
 
 /**
@@ -130,34 +123,88 @@ export async function runScrapeTask(): Promise<{
   }));
   await upsertRaceEntries(entryRows);
 
-  // 3c. agf_history — altılı ganyan başlamış şehirler hariç insert
-  const skippedCities:   string[]   = [];
-  const agfBlockedCities = new Set<string>();
+  // 3c. agf_history — koşu bazında altılı grubuna göre insert
+  //
+  // Mantık:
+  //  • Şehirde altılı yoksa → kısıtsız kaydet (agf1Rate)
+  //  • Koşu altılı grubuna ait değilse (grup 0) → 1. altılı kesimine kadar kaydet
+  //  • Grubun altılısı başlamışsa → kaydetme (donduruldu)
+  //  • 2. altılı koşusunda 1. altılı başlamışsa → agf2Rate kullan, yoksa agf1Rate
+  //
+  // Şehir bazında altılı başlangıç bilgisini önceden hazırla
+  const cityAltiliInfo = new Map<string, {
+    starts: RaceRecord[];
+    cutoffs: Map<number, Date>; // altiliIndex → kesim saati (race_time + 5dk)
+  }>();
 
-  for (const city of cities) {
-    const cityRaces = allRaces.filter((r) => r.city === city.cityName);
-    const cutoff    = getLatestAltiliCutoffUtc(cityRaces, raceDate);
-
-    if (cutoff && snapshotNow > cutoff) {
-      agfBlockedCities.add(city.cityName);
-      skippedCities.push(city.cityName);
-      console.log(
-        `[MainTask] ${city.cityName}: altılı ganyan başladı ` +
-        `(kesim UTC: ${cutoff.toISOString()}), AGF eklenmeyecek.`,
-      );
+  for (const race of allRaces.filter((r) => r.isAltiliStart)) {
+    if (!cityAltiliInfo.has(race.city)) {
+      cityAltiliInfo.set(race.city, { starts: [], cutoffs: new Map() });
     }
+    const info = cityAltiliInfo.get(race.city)!;
+    info.starts.push(race);
+    info.cutoffs.set(race.altiliIndex, getAltiliCutoffUtc(race, raceDate));
   }
 
-  const agfRows: AgfHistoryRow[] = allHorses
-    .filter((h) => !agfBlockedCities.has(h.city))
-    .map((h) => ({
-      city:        h.city,
-      race_no:     h.raceNo,
-      race_time:   h.raceTime,
-      horse_name:  h.horseName,
-      agf_rate:    h.agfRate,
-      snapshot_at: snapshotAt,
-    }));
+  const skippedCities: string[] = [];
+  const agfRows: AgfHistoryRow[] = [];
+
+  for (const h of allHorses) {
+    const cityInfo = cityAltiliInfo.get(h.city);
+
+    // Şehirde hiç altılı yoksa → kısıtsız kaydet
+    if (!cityInfo) {
+      agfRows.push({
+        city: h.city, race_no: h.raceNo, race_time: h.raceTime,
+        horse_name: h.horseName, agf_rate: h.agf1Rate, snapshot_at: snapshotAt,
+      });
+      continue;
+    }
+
+    // Bu koşunun altılı grubunu bul
+    const altiliGroup = getAltiliGroup(h.raceNo, cityInfo.starts);
+
+    // Grup 0 → altılı öncesi koşu: 1. altılının kesimini kullan
+    const sortedStarts = [...cityInfo.starts].sort((a, b) => a.altiliIndex - b.altiliIndex);
+    const effectiveGroup = altiliGroup > 0
+      ? altiliGroup
+      : (sortedStarts[0]?.altiliIndex ?? 1);
+
+    const groupCutoff = cityInfo.cutoffs.get(effectiveGroup) ?? null;
+
+    // Bu grubun altılısı başladıysa → donduruldu, kaydetme
+    if (groupCutoff && snapshotNow > groupCutoff) continue;
+
+    // Kullanılacak AGF oranını belirle
+    let agfRate: number | null = h.agf1Rate;
+    if (altiliGroup >= 2) {
+      // 2. (veya üstü) altılı grubundaki koşu:
+      // Daha düşük indeksli herhangi bir altılı başlamışsa → agf2Rate'e geç.
+      // (Örn: 1. 6'LI GANYAN başlayınca 2. 6'LI GANYAN koşuları agf2Rate kullanır)
+      const hasPrevStarted = cityInfo.starts.some((start) => {
+        if (start.altiliIndex >= altiliGroup) return false;
+        const prevCutoff = cityInfo.cutoffs.get(start.altiliIndex);
+        return prevCutoff ? snapshotNow > prevCutoff : false;
+      });
+      if (hasPrevStarted) {
+        agfRate = h.agf2Rate ?? h.agf1Rate;
+      }
+    }
+
+    agfRows.push({
+      city: h.city, race_no: h.raceNo, race_time: h.raceTime,
+      horse_name: h.horseName, agf_rate: agfRate, snapshot_at: snapshotAt,
+    });
+  }
+
+  // Tüm altılıları başlamış şehirleri logla
+  for (const [cityName, info] of cityAltiliInfo) {
+    const allStarted = [...info.cutoffs.values()].every((c) => snapshotNow > c);
+    if (allStarted) {
+      skippedCities.push(cityName);
+      console.log(`[MainTask] ${cityName}: tüm altılı ganyanlar başladı, AGF donduruldu.`);
+    }
+  }
 
   const { count, error } = await insertAgfRecords(agfRows);
 

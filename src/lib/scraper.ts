@@ -42,7 +42,8 @@ export interface HorseRecord {
   s20: number | null;
   bestTime: string;
   gny: string;
-  agfRate: number | null;
+  agf1Rate: number | null;  // 1. altılı AGF (veya şehirde tek altılı varsa tek oran)
+  agf2Rate: number | null;  // 2. altılı AGF (birden fazla altılı olduğunda dolduruluyor)
   idmFlag: boolean;
 }
 
@@ -215,17 +216,36 @@ export async function scrapeCity(
         .replace(/\s+/g, " ")
         .trim();
 
-      // AGF Oranı
-      let agfRate: number | null = null;
+      // AGF Oranı — birden fazla altılı olduğunda hücrede çoklu <a> olabilir
+      // title="1. 6'LI GANYAN : %8,87(5)"  →  agf1Rate
+      // title="2. 6'LI GANYAN : %9,65(4)"  →  agf2Rate
+      let agf1Rate: number | null = null;
+      let agf2Rate: number | null = null;
       const agfCell = row.find(".gunluk-GunlukYarisProgrami-AGFORAN");
       if (agfCell.length) {
-        const agfText =
-          agfCell.find("a").attr("title") ||
-          agfCell.find("a").text().trim() ||
-          agfCell.find("span").text().trim() ||
-          agfCell.text().trim();
-        const agfMatch = agfText.match(/%?\s*(\d+[.,]\d+)/);
-        if (agfMatch) agfRate = parseFloat(agfMatch[1].replace(",", "."));
+        const anchors = agfCell.find("a");
+        if (anchors.length <= 1) {
+          // Tek oran — title'dan yoksa metinden al
+          const src =
+            anchors.first().attr("title") ||
+            anchors.first().text().trim() ||
+            agfCell.find("span").text().trim() ||
+            agfCell.text().trim();
+          const m = src.match(/(\d+[.,]\d+)/);
+          if (m) agf1Rate = parseFloat(m[1].replace(",", "."));
+        } else {
+          // Çoklu oran — title içeriğine göre ayırt et
+          anchors.each((_k, aEl) => {
+            const title = $(aEl).attr("title") || "";
+            const m = title.match(/(\d+[.,]\d+)/);
+            const rate = m ? parseFloat(m[1].replace(",", ".")) : null;
+            if (/2\.\s*[67]['\u2018\u2019\u0060\u2032]?L[İI]\s+GANYAN/i.test(title)) {
+              agf2Rate = rate;
+            } else if (agf1Rate === null) {
+              agf1Rate = rate;
+            }
+          });
+        }
       }
 
       // İdman Flag
@@ -253,7 +273,8 @@ export async function scrapeCity(
         s20,
         bestTime,
         gny,
-        agfRate,
+        agf1Rate,
+        agf2Rate,
         idmFlag,
       });
     });
@@ -263,20 +284,14 @@ export async function scrapeCity(
     `[Scraper] ${cityName}: ${races.length} koşu, ${horses.length} at kaydı çekildi.`,
   );
 
-  // Altılı ganyan index ataması
-  // Önce HTML etiketindeki sayıyı dene (örn. "1. 6'LI GANYAN" → 1, "2. 6'LI GANYAN" → 2).
-  // Sayı yoksa ("6'LI GANYAN", "7'Lİ GANYAN") artımlı sayaç kullan.
+  // Altılı ganyan index ataması — tamamen sıralı (koşu sırasına göre 1, 2, 3...)
+  // ganyanLabel zaten "1. 6'LI GANYAN", "7'Lİ GANYAN", "2. 6'LI GANYAN" gibi
+  // okunabilir etiketi tutuyor; altiliIndex sadece sıralama/bloklama içindir.
   let altiliCounter = 0;
   for (const race of races) {
     if (!race.isAltiliStart) continue;
-
-    const numMatch = race.ganyanLabel.match(/^(\d+)\./);
-    if (numMatch) {
-      race.altiliIndex = parseInt(numMatch[1], 10);
-    } else {
-      altiliCounter++;
-      race.altiliIndex = altiliCounter;
-    }
+    altiliCounter++;
+    race.altiliIndex = altiliCounter;
   }
 
   const ganyanStarts = races.filter((r) => r.isAltiliStart);
