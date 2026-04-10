@@ -202,6 +202,10 @@ export async function getAgfTrends(windowMinutes: number) {
   // ── 3. Her koşu için "effective lastTs" hesapla ───────────────
   // Koşu başlamışsa → o koşunun başlama saatindeki son snapshot
   // Başlamamışsa    → globalLastTs (canlı)
+  //
+  // NOT: Altılı bloklama nedeniyle bazı koşular globalLastTs'te hiç
+  // kayıt içermeyebilir (daha erken dondurulmuş). Bu koşular races
+  // tablosundan alınır ve kendi effectiveLastTs'leri hesaplanır.
 
   /** "14.30" + todayStr → UTC Date (Europe/Istanbul UTC+3) */
   function raceStartUtc(raceTime: string): Date {
@@ -213,13 +217,20 @@ export async function getAgfTrends(windowMinutes: number) {
     );
   }
 
-  // Default: tüm koşular → globalLastTs
+  // Tüm DB koşuları → başlangıç değeri globalLastTs
   const raceEffLastTsMap = new Map<string, string>(); // "city||race_no" → effectiveLastTs
+  for (const race of racesResult.data ?? []) {
+    raceEffLastTsMap.set(`${race.city}||${race.race_no}`, globalLastTs);
+  }
+  // lastData'daki koşular da ekle (races tablosunda olmayan edge-case'ler için)
   for (const row of lastData) {
-    raceEffLastTsMap.set(`${row.city}||${row.race_no}`, globalLastTs);
+    if (!raceEffLastTsMap.has(`${row.city}||${row.race_no}`)) {
+      raceEffLastTsMap.set(`${row.city}||${row.race_no}`, globalLastTs);
+    }
   }
 
-  // Başlamış koşular: koşu öncesi son non-null snapshot'ı bul
+  // Başlamış koşular: koşu saatinden önceki son snapshot'ı bul
+  // NOT: Guard kaldırıldı — globalLastTs'te veri olmayan koşular da işlenir
   const startedRaces = (racesResult.data ?? []).filter(
     (race) => raceStartUtc(race.race_time) <= now,
   );
@@ -228,8 +239,6 @@ export async function getAgfTrends(windowMinutes: number) {
     await Promise.all(
       startedRaces.map(async (race) => {
         const rk = `${race.city}||${race.race_no}`;
-        if (!raceEffLastTsMap.has(rk)) return; // agf_history'de bu koşuya ait veri yok
-
         const startUtc = raceStartUtc(race.race_time);
         const { data } = await supabase
           .from("agf_history")
@@ -250,11 +259,45 @@ export async function getAgfTrends(windowMinutes: number) {
     );
   }
 
-  // ── 4. Per-race karşılaştırma snapshot'ı bul ─────────────────
+  // globalLastTs'te bulunmayan koşular için effectiveLastTs'ten veri çek
+  // (altılı bloklama nedeniyle daha erken dondurulmuş koşular)
   type RowType = NonNullable<typeof lastData>[0];
+  const lastDataKeys = new Set(lastData.map((r) => `${r.city}||${r.race_no}`));
+  const extraEntries = [...raceEffLastTsMap.entries()].filter(
+    ([rk, ts]) => !lastDataKeys.has(rk) && ts !== globalLastTs,
+  );
+
+  let combinedLastData: RowType[] = [...lastData];
+
+  if (extraEntries.length > 0) {
+    // Aynı effectiveLastTs'e sahip koşuları grupla → tek sorguda çek
+    const byTs = new Map<string, string[]>();
+    for (const [rk, ts] of extraEntries) {
+      if (!byTs.has(ts)) byTs.set(ts, []);
+      byTs.get(ts)!.push(rk);
+    }
+
+    const extraRows = await Promise.all(
+      [...byTs.entries()].map(async ([ts, raceKeys]) => {
+        const raceSet = new Set(raceKeys);
+        const { data } = await supabase
+          .from("agf_history")
+          .select("*")
+          .eq("snapshot_at", ts)
+          .limit(5000);
+        return (data ?? []).filter((d) =>
+          raceSet.has(`${d.city}||${d.race_no}`),
+        ) as RowType[];
+      }),
+    );
+
+    combinedLastData = [...combinedLastData, ...extraRows.flat()];
+  }
+
+  // ── 4. Per-race karşılaştırma snapshot'ı bul ─────────────────
   const firstMap = new Map<string, RowType>();
 
-  const raceKeys = [...new Set(lastData.map((r) => `${r.city}||${r.race_no}`))];
+  const raceKeys = [...new Set(combinedLastData.map((r) => `${r.city}||${r.race_no}`))];
   await Promise.all(
     raceKeys.map(async (rk) => {
       const [city, raceNoStr] = rk.split("||");
@@ -297,7 +340,7 @@ export async function getAgfTrends(windowMinutes: number) {
   }
 
   // ── 6. Trend hesapla ─────────────────────────────────────────
-  const trends = lastData.map((last) => {
+  const trends = combinedLastData.map((last) => {
     const key = `${last.city}|${last.race_no}|${last.horse_name}`;
     const first = firstMap.get(key);
     const prevRate = first?.agf_rate ?? null;
