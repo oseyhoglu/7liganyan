@@ -1,6 +1,9 @@
 import { NextRequest } from "next/server";
 import { getAgfTrends } from "@/lib/supabase";
 
+// Vercel Hobby: çoklu Supabase sorgusu yapıldığından 60sn sınırı gerekebilir
+export const maxDuration = 60;
+
 /**
  * GET /api/trends?window=opening|5m|15m|30m|1h
  *

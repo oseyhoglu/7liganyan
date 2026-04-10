@@ -193,7 +193,8 @@ export async function getAgfTrends(windowMinutes: number) {
   const { data: lastData } = await supabase
     .from("agf_history")
     .select("*")
-    .eq("snapshot_at", lastTs);
+    .eq("snapshot_at", lastTs)
+    .limit(5000); // Supabase default 1000 limitini aşmamak için
 
   if (!lastData?.length) {
     return { trends: [], firstSnapshot: null, lastSnapshot: lastTs };

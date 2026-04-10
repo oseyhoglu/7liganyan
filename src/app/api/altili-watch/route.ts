@@ -153,9 +153,14 @@ async function handleFallbackScrape(
   reason: string,
   upcomingAltilis: string[] = [],
 ) {
+  // Bugünün başlangıcı (UTC)
+  const todayStart = new Date(now);
+  todayStart.setUTCHours(0, 0, 0, 0);
+
   const { data: lastSnapshotRows } = await supabase
     .from("agf_history")
     .select("snapshot_at")
+    .gte("snapshot_at", todayStart.toISOString()) // Yalnızca bugünün verisine bak
     .order("snapshot_at", { ascending: false })
     .limit(1);
 
@@ -186,10 +191,20 @@ async function handleFallbackScrape(
 /**
  * GET /api/altili-watch
  *
- * Bugünkü altılı ganyan zamanlarını ve şu anki durumu gösterir.
- * Dashboard veya manuel kontrol için kullanılabilir.
+ * İki mod:
+ *  1. Authorization header varsa → POST ile aynı scraping mantığını çalıştırır.
+ *     (cron-job.org GET isteğiyle de tetikleyebilsin diye)
+ *  2. Auth yoksa → sadece durum bilgisi döner.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // Auth header varsa scraping modunda çalış (POST ile aynı mantık)
+  const authHeader = request.headers.get("authorization");
+  const expectedToken = `Bearer ${process.env.CRON_SECRET}`;
+  if (authHeader && authHeader === expectedToken) {
+    return POST(request);
+  }
+
+  // Auth yoksa → sadece durum bilgisi
   const now = new Date();
   const todayStr = now.toISOString().split("T")[0];
   const nowTrMinutes = getTurkeyMinutes(now);
