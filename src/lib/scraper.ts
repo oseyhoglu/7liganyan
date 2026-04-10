@@ -120,21 +120,22 @@ export async function scrapeCity(
       ? eidEl.text().replace(/E\.─░\.D\.|E\.İ\.D\.|EİD|:\s*/gi, "").trim()
       : "";
 
-    // Ganyan etiketi tespiti — .race-details'in tamamında ara
+    // Ganyan etiketi tespiti — .bahisTipiCard h4 başlıklarında ara
     // Yakalanacak örüntüler:
     //   "1. 6'LI GANYAN Bu koşudan başlar"
     //   "2. 6'LI GANYAN Bu koşudan başlar"
     //   "7'Lİ GANYAN Bu koşudan başlar"
     //   "6'LI GANYAN Bu koşudan başlar"
-    const raceDetailsText = raceDetails.text().replace(/\s+/g, " ");
     const GANYAN_RE =
       /(\d+\.\s*)?([67]['\u2018\u2019\u0060\u2032]?L[İI]\s+GANYAN)\s+Bu\s+ko[şs]udan\s+ba[şs]lar/i;
-    const ganyanMatch = GANYAN_RE.exec(raceDetailsText);
 
-    // Tam etiket: ön numara varsa dahil et (örn. "1. 6'LI GANYAN"), yoksa sadece tür
-    const ganyanLabel = ganyanMatch
-      ? ((ganyanMatch[1] ?? "") + ganyanMatch[2]).trim()
-      : "";
+    let ganyanLabel = "";
+    container.find(".bahisTipiCard h4").each((_k, h4El) => {
+      if (ganyanLabel) return; // zaten bulundu
+      const h4Text = $(h4El).text().trim();
+      const m = GANYAN_RE.exec(h4Text);
+      if (m) ganyanLabel = ((m[1] ?? "") + m[2]).trim();
+    });
     const isAltiliStart = ganyanLabel !== "";
 
     races.push({ city: cityName, raceNo, raceDate, raceTime, raceType, horseCategory, distance, trackSurface, eid, rawConditions, isAltiliStart, altiliIndex: 0, ganyanLabel });
