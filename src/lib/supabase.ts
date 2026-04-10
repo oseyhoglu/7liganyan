@@ -183,11 +183,14 @@ export async function getAgfTrends(windowMinutes: number) {
   const lastTs = lastTsRows[0].snapshot_at as string;
 
   // windowStart: açılış → bugün gece yarısı; diğerleri → son snapshot'tan geriye
-  // Böylece "Son 5dk" her zaman son snapshot ile 5dk önceki snapshot'ı karşılaştırır.
+  // +2 dk TOLERANS: cron 1dk'da bir çalışır, scrape eşiği "≥5dk" olduğundan
+  // gerçek snapshot aralığı ~5:30-6:00dk olur. Toleranssız "Son 5dk" penceresi
+  // önceki snapshot'ı kaçırır (zaman penceresi dışında kalır) → "—" gösterir.
+  const WINDOW_BUFFER_MS = 2 * 60 * 1000; // 2 dakika tolerans
   const windowStart =
     windowMinutes === 0
       ? todayStart
-      : new Date(new Date(lastTs).getTime() - windowMinutes * 60 * 1000);
+      : new Date(new Date(lastTs).getTime() - windowMinutes * 60 * 1000 - WINDOW_BUFFER_MS);
 
   // ── 2. Son snapshot'taki tüm atları çek (Güncel AGF) ─────
   const { data: lastData } = await supabase
