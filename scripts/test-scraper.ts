@@ -38,7 +38,7 @@ async function main() {
         At: h.horseName,
         Jokey: h.jockey,
         Kilo: h.weight,
-        AGF: h.agfRate,
+        AGF: h.agf1Rate,
       })),
     );
     if (result.horses.length > 10) {
