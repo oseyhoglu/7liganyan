@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
   // ── 2. Bugünün altılı başlangıç saatlerini DB'den çek ───────
   const { data: altiliRaces, error: altiliError } = await supabase
     .from("races")
-    .select("city, race_no, race_time, altili_index")
+    .select("city, race_no, race_time, altili_index, ganyan_label")
     .eq("race_date", todayStr)
     .eq("is_altili_start", true)
     .order("city")
@@ -84,7 +84,9 @@ export async function POST(request: NextRequest) {
     if (raceMinutes === null) continue;
 
     const minutesToRace = raceMinutes - nowTrMinutes;
-    const label = `${race.city} ${race.altili_index}.Altılı (${race.race_time})`;
+    // ganyan_label varsa onu kullan (örn. "1. 6'LI GANYAN"), yoksa indeks
+    const typeLabel = race.ganyan_label || `${race.altili_index}.Altılı`;
+    const label = `${race.city} ${typeLabel} (${race.race_time})`;
 
     if (minutesToRace <= 0) {
       // Bu altılı başladı — kayıt izleme dışı, kazıma ve güncelleme yapılmaz
@@ -213,7 +215,7 @@ export async function GET(request: NextRequest) {
 
   const { data: altiliRaces } = await supabase
     .from("races")
-    .select("city, race_no, race_time, altili_index")
+    .select("city, race_no, race_time, altili_index, ganyan_label")
     .eq("race_date", todayStr)
     .eq("is_altili_start", true)
     .order("city")
@@ -243,6 +245,7 @@ export async function GET(request: NextRequest) {
 
     return {
       city: race.city,
+      ganyanLabel: race.ganyan_label || `${race.altili_index}.Altılı`,
       altiliIndex: race.altili_index,
       raceNo: race.race_no,
       raceTime: race.race_time,

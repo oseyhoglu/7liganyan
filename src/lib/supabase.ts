@@ -31,6 +31,7 @@ export interface RaceRow {
   raw_conditions: string;
   is_altili_start: boolean;  // Bu koşu altılı ganyan başlangıcı mı?
   altili_index: number;      // 0 = değil, 1 = 1.Altılı, 2 = 2.Altılı, ...
+  ganyan_label: string;      // HTML'den okunan tam etiket: "1. 6'LI GANYAN", "7'Lİ GANYAN", "" vb.
 }
 
 export interface RaceEntryRow {

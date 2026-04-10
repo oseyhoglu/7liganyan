@@ -101,6 +101,7 @@ export async function runScrapeTask(): Promise<{
     raw_conditions:   r.rawConditions,
     is_altili_start:  r.isAltiliStart,
     altili_index:     r.altiliIndex,
+    ganyan_label:     r.ganyanLabel,
   }));
   await upsertRaces(raceRows);
 

@@ -16,8 +16,9 @@ export interface RaceRecord {
   trackSurface: string; // "Kum" | "Çim"
   eid: string;
   rawConditions: string;
-  isAltiliStart: boolean;  // "6'LI GANYAN Bu koşudan başlar" metni bulundu mu
-  altiliIndex: number;     // 0 = altılı başlangıcı değil, 1 = 1.Altılı, 2 = 2.Altılı, ...
+  isAltiliStart: boolean;  // Herhangi bir ganyan başlangıcı mı (ganyanLabel boş değilse true)
+  altiliIndex: number;     // 0 = başlangıç değil; HTML etiketindeki sayıdan türetilir (1, 2...)
+  ganyanLabel: string;     // HTML'den okunan tam etiket: "1. 6'LI GANYAN", "7'Lİ GANYAN" vb.
 }
 
 export interface HorseRecord {
@@ -119,13 +120,24 @@ export async function scrapeCity(
       ? eidEl.text().replace(/E\.─░\.D\.|E\.İ\.D\.|EİD|:\s*/gi, "").trim()
       : "";
 
-    // "6'LI GANYAN Bu koşudan başlar" metni kontrolü
-    // — .race-details'in tamamında ara (race-no + race-config + ozelKosuAdi dahil)
+    // Ganyan etiketi tespiti — .race-details'in tamamında ara
+    // Yakalanacak örüntüler:
+    //   "1. 6'LI GANYAN Bu koşudan başlar"
+    //   "2. 6'LI GANYAN Bu koşudan başlar"
+    //   "7'Lİ GANYAN Bu koşudan başlar"
+    //   "6'LI GANYAN Bu koşudan başlar"
     const raceDetailsText = raceDetails.text().replace(/\s+/g, " ");
-    const isAltiliStart = /6['\u2018\u2019\u0060]?LI\s+GANYAN\s+Bu\s+ko[şs]udan\s+ba[şs]lar/i
-      .test(raceDetailsText);
+    const GANYAN_RE =
+      /(\d+\.\s*)?([67]['\u2018\u2019\u0060\u2032]?L[İI]\s+GANYAN)\s+Bu\s+ko[şs]udan\s+ba[şs]lar/i;
+    const ganyanMatch = GANYAN_RE.exec(raceDetailsText);
 
-    races.push({ city: cityName, raceNo, raceDate, raceTime, raceType, horseCategory, distance, trackSurface, eid, rawConditions, isAltiliStart, altiliIndex: 0 });
+    // Tam etiket: ön numara varsa dahil et (örn. "1. 6'LI GANYAN"), yoksa sadece tür
+    const ganyanLabel = ganyanMatch
+      ? ((ganyanMatch[1] ?? "") + ganyanMatch[2]).trim()
+      : "";
+    const isAltiliStart = ganyanLabel !== "";
+
+    races.push({ city: cityName, raceNo, raceDate, raceTime, raceType, horseCategory, distance, trackSurface, eid, rawConditions, isAltiliStart, altiliIndex: 0, ganyanLabel });
 
     // ── At Satırları ─────────────────────────────────────
     container.find("tr").each((_j, rowEl) => {
@@ -250,18 +262,26 @@ export async function scrapeCity(
     `[Scraper] ${cityName}: ${races.length} koşu, ${horses.length} at kaydı çekildi.`,
   );
 
-  // Altılı ganyan index ataması: aynı şehirde 1. Altılı, 2. Altılı, vb.
-  // Races zaten koşu numarasına göre sıralı gelir (HTML sırası).
+  // Altılı ganyan index ataması
+  // Önce HTML etiketindeki sayıyı dene (örn. "1. 6'LI GANYAN" → 1, "2. 6'LI GANYAN" → 2).
+  // Sayı yoksa ("6'LI GANYAN", "7'Lİ GANYAN") artımlı sayaç kullan.
   let altiliCounter = 0;
   for (const race of races) {
-    if (race.isAltiliStart) {
+    if (!race.isAltiliStart) continue;
+
+    const numMatch = race.ganyanLabel.match(/^(\d+)\./);
+    if (numMatch) {
+      race.altiliIndex = parseInt(numMatch[1], 10);
+    } else {
       altiliCounter++;
       race.altiliIndex = altiliCounter;
     }
   }
 
-  if (altiliCounter > 0) {
-    console.log(`[Scraper] ${cityName}: ${altiliCounter} altılı ganyan başlangıcı tespit edildi.`);
+  const ganyanStarts = races.filter((r) => r.isAltiliStart);
+  if (ganyanStarts.length > 0) {
+    const labels = ganyanStarts.map((r) => `${r.raceNo}.Koşu → "${r.ganyanLabel}"`).join(", ");
+    console.log(`[Scraper] ${cityName}: ${ganyanStarts.length} ganyan başlangıcı → ${labels}`);
   }
 
   return { races, horses };
