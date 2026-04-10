@@ -155,64 +155,119 @@ export async function getRacesWithEntries(dateStr: string) {
  * Belirli bir zaman penceresi için AGF trend verilerini getirir.
  *
  * Strateji:
- *  1. Penceredeki global ilk ve bugünün son snapshot_at'ını bul (2 × limit-1 sorgu).
- *  2. Her iki timestamp için tam veriyi çek (~100-500 satır, limit sorunsuz).
- *  3. Son snapshot'ta olup ilk snapshot'ta olmayan atlar için
- *     koşu bazında ek sorgu yaparak kendi ilk kayıtlarını bul.
- *  4. Farkları hesapla.
+ *  - Başlamamış koşular: pencere = [şimdi - window, şimdi]   (canlı)
+ *  - Başlamış koşular  : pencere = [koşu_saati - window, koşu_saati]  (donmuş)
+ *    → "Son 5dk" demek "14:30 ile 14:25 arasındaki fark" anlamına gelir.
  *
- * @param windowMinutes  0 = günün açılışından şimdiye, diğerleri dakika cinsinden
+ * @param windowMinutes  0 = günün açılışından koşu saatine (veya şimdiye), diğerleri dakika
  */
 export async function getAgfTrends(windowMinutes: number) {
   const now = new Date();
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
+  const todayStr = now.toISOString().split("T")[0];
+  const WINDOW_BUFFER_MS = 2 * 60 * 1000; // cron gecikmesi için 2dk tolerans
 
-  // ── 1. Bugünün son snapshot_at'ını bul ───────────────────
-  const { data: lastTsRows } = await supabase
-    .from("agf_history")
-    .select("snapshot_at")
-    .gte("snapshot_at", todayStart.toISOString())
-    .order("snapshot_at", { ascending: false })
-    .limit(1);
+  // ── 1. Global son snapshot + Bugünün koşu saatleri ──────────
+  const [globalLastResult, racesResult] = await Promise.all([
+    supabase
+      .from("agf_history")
+      .select("snapshot_at")
+      .gte("snapshot_at", todayStart.toISOString())
+      .order("snapshot_at", { ascending: false })
+      .limit(1),
+    supabase
+      .from("races")
+      .select("city, race_no, race_time")
+      .eq("race_date", todayStr),
+  ]);
 
-  if (!lastTsRows?.length) {
+  if (!globalLastResult.data?.length) {
     return { trends: [], firstSnapshot: null, lastSnapshot: null };
   }
+  const globalLastTs = globalLastResult.data[0].snapshot_at as string;
 
-  const lastTs = lastTsRows[0].snapshot_at as string;
-
-  // windowStart: açılış → bugün gece yarısı; diğerleri → son snapshot'tan geriye
-  // +2 dk TOLERANS: cron 1dk'da bir çalışır, scrape eşiği "≥5dk" olduğundan
-  // gerçek snapshot aralığı ~5:30-6:00dk olur. Toleranssız "Son 5dk" penceresi
-  // önceki snapshot'ı kaçırır (zaman penceresi dışında kalır) → "—" gösterir.
-  const WINDOW_BUFFER_MS = 2 * 60 * 1000; // 2 dakika tolerans
-  const windowStart =
-    windowMinutes === 0
-      ? todayStart
-      : new Date(new Date(lastTs).getTime() - windowMinutes * 60 * 1000 - WINDOW_BUFFER_MS);
-
-  // ── 2. Son snapshot'taki tüm atları çek (Güncel AGF) ─────
+  // ── 2. Global snapshot'taki tüm at verisi ────────────────────
   const { data: lastData } = await supabase
     .from("agf_history")
     .select("*")
-    .eq("snapshot_at", lastTs)
-    .limit(5000); // Supabase default 1000 limitini aşmamak için
+    .eq("snapshot_at", globalLastTs)
+    .limit(5000);
 
   if (!lastData?.length) {
-    return { trends: [], firstSnapshot: null, lastSnapshot: lastTs };
+    return { trends: [], firstSnapshot: null, lastSnapshot: globalLastTs };
   }
 
-  // ── 3. Her koşu için, her atın penceredeki ilk NULL OLMAYAN kaydını bul ──
-  type Row = NonNullable<typeof lastData>[0];
-  const firstMap = new Map<string, Row>();
+  // ── 3. Her koşu için "effective lastTs" hesapla ───────────────
+  // Koşu başlamışsa → o koşunun başlama saatindeki son snapshot
+  // Başlamamışsa    → globalLastTs (canlı)
+
+  /** "14.30" + todayStr → UTC Date (Europe/Istanbul UTC+3) */
+  function raceStartUtc(raceTime: string): Date {
+    const [hStr, mStr] = raceTime.split(".");
+    return new Date(
+      `${todayStr}T${String(parseInt(hStr, 10)).padStart(2, "0")}:${String(
+        parseInt(mStr ?? "0", 10),
+      ).padStart(2, "0")}:00+03:00`,
+    );
+  }
+
+  // Default: tüm koşular → globalLastTs
+  const raceEffLastTsMap = new Map<string, string>(); // "city||race_no" → effectiveLastTs
+  for (const row of lastData) {
+    raceEffLastTsMap.set(`${row.city}||${row.race_no}`, globalLastTs);
+  }
+
+  // Başlamış koşular: koşu öncesi son non-null snapshot'ı bul
+  const startedRaces = (racesResult.data ?? []).filter(
+    (race) => raceStartUtc(race.race_time) <= now,
+  );
+
+  if (startedRaces.length > 0) {
+    await Promise.all(
+      startedRaces.map(async (race) => {
+        const rk = `${race.city}||${race.race_no}`;
+        if (!raceEffLastTsMap.has(rk)) return; // agf_history'de bu koşuya ait veri yok
+
+        const startUtc = raceStartUtc(race.race_time);
+        const { data } = await supabase
+          .from("agf_history")
+          .select("snapshot_at")
+          .eq("city", race.city)
+          .eq("race_no", race.race_no)
+          .not("agf_rate", "is", null)
+          .gte("snapshot_at", todayStart.toISOString())
+          .lte("snapshot_at", startUtc.toISOString()) // koşu saatine kadar
+          .order("snapshot_at", { ascending: false })
+          .limit(1);
+
+        if (data?.[0]?.snapshot_at) {
+          raceEffLastTsMap.set(rk, data[0].snapshot_at as string);
+        }
+        // Bulunamazsa globalLastTs fallback olarak kalır
+      }),
+    );
+  }
+
+  // ── 4. Per-race karşılaştırma snapshot'ı bul ─────────────────
+  type RowType = NonNullable<typeof lastData>[0];
+  const firstMap = new Map<string, RowType>();
 
   const raceKeys = [...new Set(lastData.map((r) => `${r.city}||${r.race_no}`))];
-
   await Promise.all(
     raceKeys.map(async (rk) => {
       const [city, raceNoStr] = rk.split("||");
       const race_no = parseInt(raceNoStr, 10);
+      const effectiveLastTs = raceEffLastTsMap.get(rk) ?? globalLastTs;
+
+      const windowStart =
+        windowMinutes === 0
+          ? todayStart
+          : new Date(
+              new Date(effectiveLastTs).getTime() -
+                windowMinutes * 60 * 1000 -
+                WINDOW_BUFFER_MS,
+            );
 
       const { data: earlyRows } = await supabase
         .from("agf_history")
@@ -220,20 +275,19 @@ export async function getAgfTrends(windowMinutes: number) {
         .eq("city", city)
         .eq("race_no", race_no)
         .gte("snapshot_at", windowStart.toISOString())
+        .lte("snapshot_at", effectiveLastTs) // ← anchor'ın ötesine geçme
         .not("agf_rate", "is", null)
         .order("snapshot_at", { ascending: true })
         .limit(500);
 
       for (const row of earlyRows ?? []) {
         const key = `${row.city}|${row.race_no}|${row.horse_name}`;
-        if (!firstMap.has(key)) {
-          firstMap.set(key, row);
-        }
+        if (!firstMap.has(key)) firstMap.set(key, row);
       }
     }),
   );
 
-  // ── 4. En eski geçerli snapshot zamanı (bilgi amaçlı) ────
+  // ── 5. firstSnapshot zamanını bul (bilgi amaçlı) ─────────────
   let firstSnapshot: string | null = null;
   for (const row of firstMap.values()) {
     if (!firstSnapshot || row.snapshot_at < firstSnapshot) {
@@ -241,19 +295,19 @@ export async function getAgfTrends(windowMinutes: number) {
     }
   }
 
-  // ── 5. Trend hesapla ─────────────────────────────────────
+  // ── 6. Trend hesapla ─────────────────────────────────────────
   const trends = lastData.map((last) => {
-    const key         = `${last.city}|${last.race_no}|${last.horse_name}`;
-    const first       = firstMap.get(key);
-    const prevRate    = first?.agf_rate ?? null;
+    const key = `${last.city}|${last.race_no}|${last.horse_name}`;
+    const first = firstMap.get(key);
+    const prevRate = first?.agf_rate ?? null;
     const currentRate = last.agf_rate;
-    const hasHistory  = !!first && first.snapshot_at !== last.snapshot_at;
+    const hasHistory = !!first && first.snapshot_at !== last.snapshot_at;
 
-    let change: number | null    = null;
+    let change: number | null = null;
     let changePct: number | null = null;
 
     if (hasHistory && prevRate !== null && currentRate !== null) {
-      change    = parseFloat((currentRate - prevRate).toFixed(2));
+      change = parseFloat((currentRate - prevRate).toFixed(2));
       changePct =
         prevRate !== 0
           ? parseFloat((((currentRate - prevRate) / prevRate) * 100).toFixed(2))
@@ -269,7 +323,7 @@ export async function getAgfTrends(windowMinutes: number) {
     return (a.agf_rate ?? 0) - (b.agf_rate ?? 0);
   });
 
-  return { trends, firstSnapshot, lastSnapshot: lastTs };
+  return { trends, firstSnapshot, lastSnapshot: globalLastTs };
 }
 
 /**
