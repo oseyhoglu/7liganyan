@@ -167,10 +167,10 @@ export async function getAgfTrends(windowMinutes: number) {
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
   const todayStr = now.toISOString().split("T")[0];
-  const WINDOW_BUFFER_MS = 2 * 60 * 1000; // cron gecikmesi için 2dk tolerans
+  const WINDOW_BUFFER_MS = 2 * 60 * 1000;
 
-  // ── 1. Global son snapshot + Bugünün koşu saatleri ──────────
-  const [globalLastResult, racesResult] = await Promise.all([
+  // ── 1. Global son snapshot + Bugünün koşu saatleri + Altılı başlangıçları ──
+  const [globalLastResult, racesResult, altiliResult] = await Promise.all([
     supabase
       .from("agf_history")
       .select("snapshot_at")
@@ -181,6 +181,13 @@ export async function getAgfTrends(windowMinutes: number) {
       .from("races")
       .select("city, race_no, race_time")
       .eq("race_date", todayStr),
+    supabase
+      .from("races")
+      .select("city, race_no, race_time")
+      .eq("race_date", todayStr)
+      .eq("is_altili_start", true)
+      .order("city")
+      .order("race_no"),
   ]);
 
   if (!globalLastResult.data?.length) {
@@ -200,12 +207,10 @@ export async function getAgfTrends(windowMinutes: number) {
   }
 
   // ── 3. Her koşu için "effective lastTs" hesapla ───────────────
-  // Koşu başlamışsa → o koşunun başlama saatindeki son snapshot
-  // Başlamamışsa    → globalLastTs (canlı)
-  //
-  // NOT: Altılı bloklama nedeniyle bazı koşular globalLastTs'te hiç
-  // kayıt içermeyebilir (daha erken dondurulmuş). Bu koşular races
-  // tablosundan alınır ve kendi effectiveLastTs'leri hesaplanır.
+  // Donma noktası: koşunun ait olduğu ALTILI GRUBUNUN başlangıç saati.
+  //   - Koşu 1-2 (1. altılı): 14:30 baz
+  //   - Koşu 3-8 (2. altılı): 15:30 baz
+  // Herhangi bir altılıya ait değilse kendi race_time'ı kullanılır.
 
   /** "14.30" + todayStr → UTC Date (Europe/Istanbul UTC+3) */
   function raceStartUtc(raceTime: string): Date {
@@ -217,29 +222,51 @@ export async function getAgfTrends(windowMinutes: number) {
     );
   }
 
+  // Şehir bazında altılı başlangıçları: city → [{race_no, race_time}] (artan sıra)
+  const altiliByCity = new Map<string, Array<{ race_no: number; race_time: string }>>();
+  for (const a of altiliResult.data ?? []) {
+    if (!altiliByCity.has(a.city)) altiliByCity.set(a.city, []);
+    altiliByCity.get(a.city)!.push({ race_no: a.race_no, race_time: a.race_time });
+  }
+
+  /**
+   * Bu koşunun ait olduğu altılı grubunun başlangıç saatini döner.
+   * Koşu numarasına göre en son altılı başlangıcını (race_no <= raceNo) bulur.
+   */
+  function getAltiliFreezeUtc(city: string, raceNo: number): Date | null {
+    const starts = altiliByCity.get(city);
+    if (!starts?.length) return null;
+    let best: { race_no: number; race_time: string } | null = null;
+    for (const s of starts) {
+      if (s.race_no <= raceNo) best = s;
+    }
+    return best ? raceStartUtc(best.race_time) : null;
+  }
+
   // Tüm DB koşuları → başlangıç değeri globalLastTs
-  const raceEffLastTsMap = new Map<string, string>(); // "city||race_no" → effectiveLastTs
+  const raceEffLastTsMap = new Map<string, string>();
   for (const race of racesResult.data ?? []) {
     raceEffLastTsMap.set(`${race.city}||${race.race_no}`, globalLastTs);
   }
-  // lastData'daki koşular da ekle (races tablosunda olmayan edge-case'ler için)
   for (const row of lastData) {
     if (!raceEffLastTsMap.has(`${row.city}||${row.race_no}`)) {
       raceEffLastTsMap.set(`${row.city}||${row.race_no}`, globalLastTs);
     }
   }
 
-  // Başlamış koşular: koşu saatinden önceki son snapshot'ı bul
-  // NOT: Guard kaldırıldı — globalLastTs'te veri olmayan koşular da işlenir
-  const startedRaces = (racesResult.data ?? []).filter(
-    (race) => raceStartUtc(race.race_time) <= now,
-  );
+  // Altılısı başlamış koşular → effectiveLastTs = altılı grubunun başlama saatindeki son snapshot
+  const frozenRaces = (racesResult.data ?? []).filter((race) => {
+    const freezeUtc = getAltiliFreezeUtc(race.city, race.race_no) ?? raceStartUtc(race.race_time);
+    return freezeUtc <= now;
+  });
 
-  if (startedRaces.length > 0) {
+  if (frozenRaces.length > 0) {
     await Promise.all(
-      startedRaces.map(async (race) => {
+      frozenRaces.map(async (race) => {
         const rk = `${race.city}||${race.race_no}`;
-        const startUtc = raceStartUtc(race.race_time);
+        // Donma noktası: altılı grubunun başlangıç saati (kendi race_time değil)
+        const freezeUtc = getAltiliFreezeUtc(race.city, race.race_no) ?? raceStartUtc(race.race_time);
+
         const { data } = await supabase
           .from("agf_history")
           .select("snapshot_at")
@@ -247,20 +274,18 @@ export async function getAgfTrends(windowMinutes: number) {
           .eq("race_no", race.race_no)
           .not("agf_rate", "is", null)
           .gte("snapshot_at", todayStart.toISOString())
-          .lte("snapshot_at", startUtc.toISOString()) // koşu saatine kadar
+          .lte("snapshot_at", freezeUtc.toISOString()) // altılı başlama saatine kadar
           .order("snapshot_at", { ascending: false })
           .limit(1);
 
         if (data?.[0]?.snapshot_at) {
           raceEffLastTsMap.set(rk, data[0].snapshot_at as string);
         }
-        // Bulunamazsa globalLastTs fallback olarak kalır
       }),
     );
   }
 
   // globalLastTs'te bulunmayan koşular için effectiveLastTs'ten veri çek
-  // (altılı bloklama nedeniyle daha erken dondurulmuş koşular)
   type RowType = NonNullable<typeof lastData>[0];
   const lastDataKeys = new Set(lastData.map((r) => `${r.city}||${r.race_no}`));
   const extraEntries = [...raceEffLastTsMap.entries()].filter(
@@ -270,7 +295,6 @@ export async function getAgfTrends(windowMinutes: number) {
   let combinedLastData: RowType[] = [...lastData];
 
   if (extraEntries.length > 0) {
-    // Aynı effectiveLastTs'e sahip koşuları grupla → tek sorguda çek
     const byTs = new Map<string, string[]>();
     for (const [rk, ts] of extraEntries) {
       if (!byTs.has(ts)) byTs.set(ts, []);
@@ -319,7 +343,7 @@ export async function getAgfTrends(windowMinutes: number) {
         .eq("city", city)
         .eq("race_no", race_no)
         .gte("snapshot_at", windowStart.toISOString())
-        .lte("snapshot_at", effectiveLastTs) // ← anchor'ın ötesine geçme
+        .lte("snapshot_at", effectiveLastTs)
         .not("agf_rate", "is", null)
         .order("snapshot_at", { ascending: true })
         .limit(500);
