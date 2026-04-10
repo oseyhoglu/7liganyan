@@ -285,14 +285,31 @@ export async function getAgfTrends(windowMinutes: number) {
     );
   }
 
-  // globalLastTs'te bulunmayan koşular için effectiveLastTs'ten veri çek
+  // Donmuş koşular için effectiveLastTs'ten veri çek.
+  // Önemli: donmuş koşu globalLastTs'te null agf_rate ile görünebilir;
+  // bu yüzden lastData'da olsun ya da olmasın, tüm donmuş koşuları
+  // kendi effectiveLastTs snapshot'ından almak gerekir.
   type RowType = NonNullable<typeof lastData>[0];
-  const lastDataKeys = new Set(lastData.map((r) => `${r.city}||${r.race_no}`));
-  const extraEntries = [...raceEffLastTsMap.entries()].filter(
-    ([rk, ts]) => !lastDataKeys.has(rk) && ts !== globalLastTs,
+
+  // effectiveLastTs != globalLastTs olan TÜM donmuş race key'leri
+  const frozenRaceKeys = new Set(
+    [...raceEffLastTsMap.entries()]
+      .filter(([, ts]) => ts !== globalLastTs)
+      .map(([rk]) => rk),
   );
 
-  let combinedLastData: RowType[] = [...lastData];
+  // globalLastTs verisinden donmuş koşuları çıkar; onların "last" verisi
+  // kendi effectiveLastTs snapshot'ından eklenecek.
+  const filteredLastData = lastData.filter(
+    (r) => !frozenRaceKeys.has(`${r.city}||${r.race_no}`),
+  );
+
+  // Tüm donmuş koşuları extraEntries'e al (lastData'da olup olmamasına bakma)
+  const extraEntries = [...raceEffLastTsMap.entries()].filter(
+    ([_rk, ts]) => ts !== globalLastTs,
+  );
+
+  let combinedLastData: RowType[] = [...filteredLastData];
 
   if (extraEntries.length > 0) {
     const byTs = new Map<string, string[]>();
